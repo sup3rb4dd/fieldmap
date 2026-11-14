@@ -1,10 +1,10 @@
 # FieldMap
 
-A simple, free, ATAK-style map for Android that talks to your **BTECH UV-PRO** (or any Bluetooth KISS TNC) using APRS.
+A simple, free, ATAK-style map for Android that talks to your **BTECH UV-PRO** (APRS over Bluetooth KISS TNC) and **Meshtastic** radios like the Heltec V4 — at the same time if you want.
 
 ## Features
 - Map with your GPS position and an **MGRS** readout for you and the map center
-- **Offline maps**: USGS Topo / Satellite layers, download any area for use without cell service
+- **Offline maps**: USGS Topo and HD Satellite (NAIP imagery to zoom 19), download any area for use without cell service
 - **Pins**: long-press to drop, share with your team over the radio (as APRS objects)
 - **Range & bearing** to any pin, station or typed-in MGRS grid
 - **Team positions**: everyone's radio beacons show up on the map
@@ -25,6 +25,12 @@ Open it on your phone and allow "install unknown apps" when Android asks.
 5. Tune every radio to the same frequency (the US APRS frequency is 144.390 MHz).
 
 Transmitting APRS uses amateur frequencies and requires an amateur radio license. Without a callsign set, FieldMap only listens.
+
+## Hook up Meshtastic (Heltec V4 etc.)
+1. Close the official Meshtastic app (only one app can hold the Bluetooth connection).
+2. In FieldMap tap **RADIO ▸ Meshtastic**, pick your node. If Android asks for a PIN, use the one on the node's screen (default 123456).
+3. Nodes with positions appear on the map in purple, waypoints show as pins, and channel messages land in Chat.
+Pins you share and team chat go out on every connected radio. Your position goes to the mesh at most every 5 minutes to save airtime.
 
 ## Building
 GitHub Actions builds the APK on every push to `main` (see `.github/workflows/build.yml`).

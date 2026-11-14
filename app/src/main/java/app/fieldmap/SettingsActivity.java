@@ -30,6 +30,10 @@ public class SettingsActivity extends AppCompatActivity {
         EditText filter = findViewById(R.id.setFilter);
         Spinner beacon = findViewById(R.id.setBeacon);
         Spinner symbol = findViewById(R.id.setSymbol);
+        Spinner detail = findViewById(R.id.setDetail);
+        detail.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"Sharpest (smallest text)", "Balanced", "Large text (blurrier)"}));
+        detail.setSelection(app.prefs.getInt("detail", 1));
         CheckBox imperial = findViewById(R.id.setImperial);
         CheckBox keepOn = findViewById(R.id.setKeepOn);
 
@@ -76,6 +80,7 @@ public class SettingsActivity extends AppCompatActivity {
                     .putString("symCode", sym.substring(1, 2))
                     .putBoolean("imperial", imperial.isChecked())
                     .putBoolean("keepOn", keepOn.isChecked())
+                    .putInt("detail", Math.max(0, detail.getSelectedItemPosition()))
                     .apply();
             Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
             finish();

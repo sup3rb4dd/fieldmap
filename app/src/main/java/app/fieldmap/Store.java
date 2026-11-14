@@ -24,22 +24,28 @@ public class Store {
         public String comment = "";
         public long time;
         public boolean shared;     // I have sent it over the radio
+        public int meshId;         // Meshtastic waypoint id for my pins (0 = not assigned yet)
 
         public boolean isMine() { return owner == null || owner.isEmpty(); }
     }
 
     public static class Station {
-        public String call;
+        public String call;        // APRS callsign, or Meshtastic node id like !a1b2c3d4
+        public String name = "";   // friendly name (Meshtastic long name)
+        public String via = "APRS";
         public double lat, lon;
         public long time;
         public char table = '/', code = '[';
         public String comment = "";
+
+        public String label() { return name == null || name.isEmpty() ? call : name; }
     }
 
     public static class Msg {
         public String from, to, text, id;
         public long time;
         public boolean out, acked;
+        public String via = "APRS";
     }
 
     public final Map<String, Pin> pins = new LinkedHashMap<>();
@@ -67,7 +73,10 @@ public class Store {
     }
 
     public void upsertRemotePin(String owner, String name, double lat, double lon, String comment) {
-        String id = "obj:" + name;
+        upsertRemotePin("obj:" + name, owner, name, lat, lon, comment);
+    }
+
+    public void upsertRemotePin(String id, String owner, String name, double lat, double lon, String comment) {
         Pin p = pins.get(id);
         if (p == null) {
             p = new Pin();
@@ -89,19 +98,31 @@ public class Store {
     }
 
     public void upsertStation(String call, double lat, double lon, char table, char code, String comment) {
+        upsertStation(call, lat, lon, table, code, comment, "APRS", null, System.currentTimeMillis());
+    }
+
+    public void upsertStation(String call, double lat, double lon, char table, char code, String comment,
+                              String via, String name, long time) {
         Station s = stations.get(call);
         if (s == null) {
             s = new Station();
             s.call = call;
             stations.put(call, s);
         }
+        s.via = via;
+        if (name != null && !name.isEmpty()) s.name = name;
         s.lat = lat;
         s.lon = lon;
         s.table = table;
         s.code = code;
         s.comment = comment == null ? "" : comment;
-        s.time = System.currentTimeMillis();
+        s.time = time;
         save();
+    }
+
+    public void renameStation(String call, String name) {
+        Station s = stations.get(call);
+        if (s != null && name != null && !name.isEmpty() && !name.equals(s.name)) { s.name = name; save(); }
     }
 
     public void removeStation(String call) {
@@ -110,7 +131,12 @@ public class Store {
     }
 
     public Msg addMessage(String from, String to, String text, String id, boolean out) {
+        return addMessage(from, to, text, id, out, "APRS");
+    }
+
+    public Msg addMessage(String from, String to, String text, String id, boolean out, String via) {
         Msg m = new Msg();
+        m.via = via;
         m.from = from;
         m.to = to;
         m.text = text;
@@ -160,7 +186,7 @@ public class Store {
             for (Pin p : pins.values()) {
                 JSONObject o = new JSONObject();
                 o.put("id", p.id); o.put("name", p.name); o.put("lat", p.lat); o.put("lon", p.lon);
-                o.put("owner", p.owner); o.put("comment", p.comment); o.put("time", p.time); o.put("shared", p.shared);
+                o.put("owner", p.owner); o.put("comment", p.comment); o.put("time", p.time); o.put("shared", p.shared); o.put("meshId", p.meshId);
                 jp.put(o);
             }
             JSONArray js = new JSONArray();
@@ -168,13 +194,14 @@ public class Store {
                 JSONObject o = new JSONObject();
                 o.put("call", s.call); o.put("lat", s.lat); o.put("lon", s.lon); o.put("time", s.time);
                 o.put("table", String.valueOf(s.table)); o.put("code", String.valueOf(s.code)); o.put("comment", s.comment);
+                o.put("name", s.name); o.put("via", s.via);
                 js.put(o);
             }
             JSONArray jm = new JSONArray();
             for (Msg m : messages) {
                 JSONObject o = new JSONObject();
                 o.put("from", m.from); o.put("to", m.to); o.put("text", m.text); o.put("id", m.id == null ? "" : m.id);
-                o.put("time", m.time); o.put("out", m.out); o.put("acked", m.acked);
+                o.put("time", m.time); o.put("out", m.out); o.put("acked", m.acked); o.put("via", m.via);
                 jm.put(o);
             }
             sp.edit().putString("pins", jp.toString()).putString("stations", js.toString())
@@ -192,6 +219,7 @@ public class Store {
                 p.id = o.getString("id"); p.name = o.optString("name"); p.lat = o.getDouble("lat"); p.lon = o.getDouble("lon");
                 p.owner = o.optString("owner"); p.comment = o.optString("comment"); p.time = o.optLong("time");
                 p.shared = o.optBoolean("shared");
+                p.meshId = o.optInt("meshId");
                 pins.put(p.id, p);
             }
             JSONArray js = new JSONArray(sp.getString("stations", "[]"));
@@ -203,6 +231,8 @@ public class Store {
                 s.table = t.isEmpty() ? '/' : t.charAt(0);
                 s.code = c.isEmpty() ? '[' : c.charAt(0);
                 s.comment = o.optString("comment");
+                s.name = o.optString("name");
+                s.via = o.optString("via", "APRS");
                 stations.put(s.call, s);
             }
             JSONArray jm = new JSONArray(sp.getString("messages", "[]"));
@@ -213,6 +243,7 @@ public class Store {
                 String id = o.optString("id");
                 m.id = id.isEmpty() ? null : id;
                 m.time = o.optLong("time"); m.out = o.optBoolean("out"); m.acked = o.optBoolean("acked");
+                m.via = o.optString("via", "APRS");
                 messages.add(m);
             }
             unread = sp.getInt("unread", 0);

@@ -24,19 +24,56 @@ public final class Tiles {
         }
     }
 
+    /**
+     * USGS imagery with extra zoom: cached tiles up to zoom 16, then the USGS NAIP Plus image
+     * service (about 0.6–1 m per pixel, public domain) renders 17–19 on request.
+     */
+    static class UsgsImageryHd extends OnlineTileSourceBase {
+        private static final double HALF = 20037508.342789244;
+        private final String cached, naip;
+
+        UsgsImageryHd(String name, String cachedService) {
+            super(name, 0, 19, 256, "",
+                    new String[]{"https://basemap.nationalmap.gov/arcgis/rest/services/" + cachedService + "/MapServer/tile/"},
+                    "USGS The National Map / NAIP");
+            cached = "https://basemap.nationalmap.gov/arcgis/rest/services/" + cachedService + "/MapServer/tile/";
+            naip = "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage";
+        }
+
+        @Override
+        public String getTileURLString(long index) {
+            int z = MapTileIndex.getZoom(index), x = MapTileIndex.getX(index), y = MapTileIndex.getY(index);
+            if (z <= 16) return cached + z + "/" + y + "/" + x;
+            double size = 2 * HALF / (1L << z);
+            double xmin = -HALF + x * size, xmax = xmin + size;
+            double ymax = HALF - y * size, ymin = ymax - size;
+            return naip + "?bbox=" + xmin + "," + ymin + "," + xmax + "," + ymax
+                    + "&bboxSR=3857&imageSR=3857&size=256,256&format=jpg&f=image";
+        }
+    }
+
     public static final String[] NAMES = {
             "USGS Topo (offline OK)",
-            "USGS Satellite (offline OK)",
+            "USGS Satellite HD (offline OK)",
             "USGS Satellite + Topo (offline OK)",
             "OpenStreetMap (online only)"
     };
 
     public static ITileSource byIndex(int i) {
         switch (i) {
-            case 1: return new Usgs("USGSImagery", "USGSImageryOnly", 16);
+            case 1: return new UsgsImageryHd("USGSImageryHD", "USGSImageryOnly");
             case 2: return new Usgs("USGSImageryTopo", "USGSImageryTopo", 16);
             case 3: return TileSourceFactory.MAPNIK;
             default: return new Usgs("USGSTopo", "USGSTopo", 16);
+        }
+    }
+
+    /** Highest zoom with real (not stretched) tiles for each layer. */
+    public static int maxNativeZoom(int i) {
+        switch (i) {
+            case 1: return 19;
+            case 3: return 19;
+            default: return 16;
         }
     }
 

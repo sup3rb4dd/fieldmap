@@ -43,9 +43,11 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
                 TextView tv = (TextView) super.getView(position, convertView, parent);
                 Store.Msg m = getItem(position);
                 String time = fmt.format(new Date(m.time));
-                String who = m.out ? "me → " + m.to : m.from + (m.to.equalsIgnoreCase(app.group()) ? " → team" : " → me");
+                boolean team = m.to.equalsIgnoreCase(app.group());
+                String who = m.out ? "me → " + (team ? "team" : app.displayName(m.to))
+                        : app.displayName(m.from) + (team ? " → team" : " → me");
                 String status = m.out && m.id != null ? (m.acked ? "  ✓" : "  …") : "";
-                tv.setText(time + "  " + who + "\n" + m.text + status);
+                tv.setText(time + "  " + who + "  [" + (m.via == null ? "APRS" : m.via) + "]\n" + m.text + status);
                 tv.setTextColor(m.out ? Color.parseColor("#FF7CFC00") : Color.parseColor("#FFE8F0E8"));
                 tv.setTextSize(15);
                 return tv;
@@ -55,6 +57,7 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
         list.setOnItemClickListener((parent, view, position, id) -> {
             Store.Msg m = adapter.getItem(position);
             if (m != null && !m.out) to.setText(m.to.equalsIgnoreCase(app.group()) ? app.group() : m.from);
+            if (m != null && m.out) to.setText(m.to);
         });
 
         findViewById(R.id.chatSend).setOnClickListener(v -> send());
@@ -62,11 +65,18 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void send() {
         String text = input.getText().toString().trim();
-        String dest = to.getText().toString().trim().toUpperCase(Locale.US);
+        String dest = to.getText().toString().trim();
         if (text.isEmpty()) return;
         if (dest.isEmpty()) dest = app.group();
-        if (!app.hasCallsign()) { toast("Set your callsign in Settings to send"); return; }
-        if (!app.radio.isConnected()) { toast("Radio not connected"); return; }
+        if (dest.startsWith("!")) {
+            if (!app.mesh.isConnected()) { toast("Meshtastic radio not connected"); return; }
+        } else if (!dest.equalsIgnoreCase(app.group())) {
+            if (!app.radio.isConnected()) { toast("UV-PRO not connected"); return; }
+            if (!app.hasCallsign()) { toast("Set your callsign in Settings to send over APRS"); return; }
+        } else if (!app.canShare()) {
+            toast(app.radio.isConnected() ? "Set your callsign in Settings to send over APRS" : "Connect a radio first");
+            return;
+        }
         if (app.sendMessage(dest, text)) input.setText("");
         else toast("Send failed — check the packet log");
     }
@@ -75,8 +85,9 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
         app.store.unread = 0;
         app.store.save();
         adapter.notifyDataSetChanged();
+        String links = (app.radio.isConnected() ? "APRS " : "") + (app.mesh.isConnected() ? "MESH" : "");
         header.setText("Team: " + app.group() + "   Me: " + (app.hasCallsign() ? app.myCall() : "(no callsign)")
-                + (app.radio.isConnected() ? "" : "   · radio off"));
+                + "\nLinks: " + (links.trim().isEmpty() ? "none connected" : links.trim()));
     }
 
     @Override protected void onResume() { super.onResume(); app.addListener(this); refresh(); }

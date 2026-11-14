@@ -17,9 +17,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import app.fieldmap.core.Aprs;
 import app.fieldmap.core.Ax25;
 import app.fieldmap.core.Kiss;
+import app.fieldmap.core.Mesh;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
 
 /** App-wide state: settings, saved data, the radio link and APRS handling. */
-public class FieldMapApp extends Application implements RadioLink.Callback {
+public class FieldMapApp extends Application implements RadioLink.Callback, MeshLink.Callback {
 
     public interface Listener {
         void onDataChanged();
@@ -34,7 +39,14 @@ public class FieldMapApp extends Application implements RadioLink.Callback {
     public SharedPreferences prefs;
     public Store store;
     public RadioLink radio;
+    public MeshLink mesh;
     public Location lastLoc;
+
+    /** Meshtastic: my node number and the names of nodes we know. */
+    public int myNodeNum = 0;
+    private final Map<Integer, String> nodeNames = new HashMap<>();
+    private final Random rnd = new Random();
+    private long lastMeshBeacon = 0;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
@@ -49,6 +61,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback {
         prefs = getSharedPreferences("settings", MODE_PRIVATE);
         store = new Store(this);
         radio = new RadioLink(this);
+        mesh = new MeshLink(this, this);
         msgCounter = prefs.getInt("msgCounter", 1);
         store.pruneStations(24 * 3600 * 1000L);
     }
@@ -85,7 +98,25 @@ public class FieldMapApp extends Application implements RadioLink.Callback {
 
     public boolean hasCallsign() { return !callsign().isEmpty(); }
 
+    /** APRS transmit needs a callsign and the UV-PRO connected. */
     public boolean canTransmit() { return hasCallsign() && radio.isConnected(); }
+
+    /** Anything that can send right now: APRS (with callsign) or Meshtastic. */
+    public boolean canShare() { return canTransmit() || mesh.isConnected(); }
+
+    /** Friendly name for a callsign or Meshtastic node id. */
+    public String displayName(String key) {
+        if (key == null) return "";
+        Store.Station s = store.stations.get(key);
+        if (s != null && s.name != null && !s.name.isEmpty()) return s.name;
+        if (key.startsWith("!")) {
+            try {
+                String n = nodeNames.get((int) Long.parseLong(key.substring(1), 16));
+                if (n != null) return n;
+            } catch (NumberFormatException ignored) { }
+        }
+        return key;
+    }
 
     /** Stations allowed on the map; empty = everyone. */
     public boolean passesFilter(String call) {
@@ -149,21 +180,83 @@ public class FieldMapApp extends Application implements RadioLink.Callback {
     public boolean beaconNow() {
         Location l = lastLoc;
         if (l == null) { log("Beacon skipped: no GPS fix yet"); return false; }
-        boolean ok = sendInfo(Aprs.position(l.getLatitude(), l.getLongitude(), symTable(), symCode(), statusComment()));
-        if (ok) lastBeacon = System.currentTimeMillis();
+        boolean ok = false;
+        if (canTransmit()) {
+            ok = sendInfo(Aprs.position(l.getLatitude(), l.getLongitude(), symTable(), symCode(), statusComment()));
+            if (ok) lastBeacon = System.currentTimeMillis();
+        }
+        if (mesh.isConnected()) ok |= meshBeacon();
         return ok;
     }
 
+    private boolean meshBeacon() {
+        Location l = lastLoc;
+        if (l == null || !mesh.isConnected()) return false;
+        byte[] pos = Mesh.positionPayload(l.getLatitude(), l.getLongitude(),
+                l.hasAltitude() ? (int) Math.round(l.getAltitude()) : 0, (int) (System.currentTimeMillis() / 1000));
+        boolean ok = mesh.send(Mesh.packet(Mesh.BROADCAST, 0, Mesh.PORT_POSITION, pos, newPacketId(), false));
+        if (ok) { lastMeshBeacon = System.currentTimeMillis(); log("MESH TX position"); }
+        return ok;
+    }
+
+    private int newPacketId() { return rnd.nextInt(Integer.MAX_VALUE - 1) + 1; }
+
     public boolean sharePin(Store.Pin p, boolean live) {
-        boolean ok = sendInfo(Aprs.object(p.name, p.lat, p.lon, '\\', 'A', p.comment, live));
+        boolean ok = false;
+        if (canTransmit()) ok = sendInfo(Aprs.object(p.name, p.lat, p.lon, '\\', 'A', p.comment, live));
+        if (mesh.isConnected()) {
+            if (p.meshId == 0) p.meshId = newPacketId();
+            byte[] wp = Mesh.waypointPayload(p.meshId, p.lat, p.lon, live ? 0 : 1, p.name, p.comment);
+            boolean m = mesh.send(Mesh.packet(Mesh.BROADCAST, 0, Mesh.PORT_WAYPOINT, wp, newPacketId(), true));
+            if (m) log("MESH TX waypoint " + p.name + (live ? "" : " (delete)"));
+            ok |= m;
+        }
         if (ok && live) { p.shared = true; store.save(); }
         return ok;
     }
 
-    /** Group messages go out without an id (no acks); direct messages get an id. */
+    /**
+     * Team messages go out on every connected link. "!xxxxxxxx" goes to one Meshtastic node,
+     * anything else to one APRS callsign.
+     */
     public boolean sendMessage(String to, String text) {
-        String dest = to.trim().toUpperCase(Locale.US);
-        boolean direct = !dest.equals(group());
+        String dest = to.trim();
+        if (dest.startsWith("!")) return sendMeshDirect(dest.toLowerCase(Locale.US), text);
+        dest = dest.toUpperCase(Locale.US);
+        if (dest.equals(group())) {
+            boolean ok = false;
+            String via = "";
+            if (canTransmit() && sendInfo(Aprs.message(dest, text, null))) { ok = true; via = "APRS"; }
+            if (mesh.isConnected() && mesh.send(Mesh.text(Mesh.BROADCAST, 0, text, newPacketId()))) {
+                ok = true; via = via.isEmpty() ? "MESH" : via + "+MESH";
+                log("MESH TX text to channel");
+            }
+            if (ok) { store.addMessage(myLabel(), dest, text, null, true, via); notifyData(); }
+            return ok;
+        }
+        return sendAprsMessage(dest, text);
+    }
+
+    private String myLabel() {
+        if (hasCallsign()) return myCall();
+        return myNodeNum != 0 ? Mesh.nodeId(myNodeNum) : "me";
+    }
+
+    private boolean sendMeshDirect(String nodeId, String text) {
+        if (!mesh.isConnected()) { log("TX blocked: Meshtastic not connected"); return false; }
+        int num;
+        try { num = (int) Long.parseLong(nodeId.substring(1), 16); } catch (NumberFormatException e) { return false; }
+        boolean ok = mesh.send(Mesh.text(num, 0, text, newPacketId()));
+        if (ok) {
+            log("MESH TX text to " + nodeId);
+            store.addMessage(myLabel(), nodeId, text, null, true, "MESH");
+            notifyData();
+        }
+        return ok;
+    }
+
+    private boolean sendAprsMessage(String dest, String text) {
+        boolean direct = true;
         String id = null;
         if (direct) {
             id = String.valueOf(msgCounter);
@@ -181,10 +274,15 @@ public class FieldMapApp extends Application implements RadioLink.Callback {
     private final Runnable beaconTask = new Runnable() {
         @Override public void run() {
             int secs = beaconSeconds();
-            if (secs > 0 && canTransmit()) {
-                long now = System.currentTimeMillis();
-                if (now - lastBeacon >= secs * 1000L - 2000) beaconNow();
+            long now = System.currentTimeMillis();
+            if (secs > 0 && canTransmit() && now - lastBeacon >= secs * 1000L - 2000) {
+                Location l = lastLoc;
+                if (l != null && sendInfo(Aprs.position(l.getLatitude(), l.getLongitude(), symTable(), symCode(), statusComment())))
+                    lastBeacon = now;
             }
+            // LoRa airtime is precious: never more often than every 5 minutes on the mesh
+            int meshSecs = Math.max(secs, 300);
+            if (secs > 0 && mesh.isConnected() && now - lastMeshBeacon >= meshSecs * 1000L - 2000) meshBeacon();
             main.postDelayed(this, 15000);
         }
     };
@@ -194,10 +292,103 @@ public class FieldMapApp extends Application implements RadioLink.Callback {
     @Override
     public void onRadioState(RadioLink.State state, String detail) {
         log("Radio " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
-        main.removeCallbacks(beaconTask);
         if (state == RadioLink.State.CONNECTED) {
-            main.postDelayed(() -> { if (canTransmit() && beaconSeconds() > 0) beaconNow(); }, 2000);
-            main.postDelayed(beaconTask, 15000);
+            main.postDelayed(() -> {
+                if (canTransmit() && beaconSeconds() > 0) {
+                    Location l = lastLoc;
+                    if (l != null && sendInfo(Aprs.position(l.getLatitude(), l.getLongitude(), symTable(), symCode(), statusComment())))
+                        lastBeacon = System.currentTimeMillis();
+                }
+            }, 2000);
+        }
+        restartBeaconTask();
+        notifyRadio();
+    }
+
+    private void restartBeaconTask() {
+        main.removeCallbacks(beaconTask);
+        if (radio.isConnected() || mesh.isConnected()) main.postDelayed(beaconTask, 15000);
+    }
+
+    // ---------- Meshtastic ----------
+
+    @Override
+    public void onMeshState(RadioLink.State state, String detail) {
+        log("Mesh " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
+        if (state == RadioLink.State.CONNECTED) lastMeshBeacon = 0;
+        restartBeaconTask();
+        notifyRadio();
+    }
+
+    @Override
+    public void onFromRadio(byte[] data) {
+        Mesh.Event e;
+        try {
+            e = Mesh.parseFromRadio(data);
+        } catch (RuntimeException ex) {
+            log("MESH RX unreadable (" + data.length + " bytes)");
+            return;
+        }
+        long now = System.currentTimeMillis();
+        String fromId = Mesh.nodeId(e.from);
+        switch (e.kind) {
+            case MY_INFO:
+                myNodeNum = e.myNode;
+                log("MESH my node " + Mesh.nodeId(myNodeNum));
+                break;
+            case NODE_INFO: {
+                Mesh.Node n = e.node;
+                nodeNames.put(n.num, n.label());
+                if (n.num != myNodeNum && n.hasPosition() && passesFilter(n.id)) {
+                    long heard = n.lastHeard > 0 ? n.lastHeard * 1000 : now - 3600_000L;
+                    Store.Station old = store.stations.get(n.id);
+                    if (old == null || old.time < heard)
+                        store.upsertStation(n.id, n.lat, n.lon, '/', '[', "", "MESH", n.label(), heard);
+                } else {
+                    store.renameStation(n.id, n.label());
+                }
+                break;
+            }
+            case CONFIG_COMPLETE:
+                log("MESH node database loaded (" + nodeNames.size() + " nodes)");
+                notifyData();
+                break;
+            case USER:
+                nodeNames.put(e.from, e.node.label());
+                store.renameStation(fromId, e.node.label());
+                log("MESH RX nodeinfo " + fromId + " " + e.node.label());
+                notifyData();
+                break;
+            case POSITION:
+                log("MESH RX position " + displayName(fromId));
+                if (e.from != myNodeNum && passesFilter(fromId)) {
+                    store.upsertStation(fromId, e.lat, e.lon, '/', '[', "", "MESH", nodeNames.get(e.from), now);
+                    notifyData();
+                }
+                break;
+            case TEXT: {
+                if (e.from == myNodeNum) break;
+                boolean broadcast = e.to == Mesh.BROADCAST;
+                if (!broadcast && e.to != myNodeNum) break;
+                log("MESH RX text " + displayName(fromId) + ": " + e.text);
+                store.addMessage(fromId, broadcast ? group() : myLabel(), e.text, null, false, "MESH");
+                notifyData();
+                break;
+            }
+            case WAYPOINT: {
+                if (e.from == myNodeNum) break;
+                Mesh.Waypoint w = e.waypoint;
+                String id = "wp:" + Integer.toHexString(w.id);
+                boolean expired = w.expire == 1 || (w.expire > 1 && (w.expire & 0xFFFFFFFFL) < now / 1000);
+                log("MESH RX waypoint " + w.name + (expired || !w.hasPosition() ? " (deleted)" : ""));
+                if (expired || !w.hasPosition()) store.removePin(id);
+                else if (passesFilter(fromId))
+                    store.upsertRemotePin(id, displayName(fromId), w.name.isEmpty() ? "Waypoint" : w.name, w.lat, w.lon, w.desc);
+                notifyData();
+                break;
+            }
+            default:
+                break;
         }
         notifyRadio();
     }

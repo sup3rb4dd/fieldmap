@@ -5,6 +5,12 @@ import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
+import android.os.ParcelUuid;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -67,7 +73,7 @@ import app.fieldmap.core.Mgrs;
 @SuppressLint("MissingPermission")
 public class MainActivity extends AppCompatActivity implements FieldMapApp.Listener {
 
-    private static final int REQ_LOCATION = 1, REQ_BT = 2;
+    private static final int REQ_LOCATION = 1, REQ_BT = 2, REQ_MESH = 3;
 
     private FieldMapApp app;
     private MapView map;
@@ -133,9 +139,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     .setMessage("• Long-press the map to drop a pin.\n"
                             + "• Tap any pin or station to get range and bearing.\n"
                             + "• Use Map ▸ ☰ ▸ Download this area to save maps for offline use.\n\n"
-                            + "To share positions with your UV-PRO: turn on Menu ▸ General Settings ▸ KISS TNC on the radio, "
-                            + "pair it in Android Bluetooth settings, then tap RADIO at the top.\n\n"
-                            + "Set your callsign in Settings to transmit. Without one, FieldMap only listens.")
+                            + "Tap RADIO at the top to connect a UV-PRO (APRS) and/or a Meshtastic radio like the Heltec V4.\n\n"
+                            + "UV-PRO: turn on Menu ▸ General Settings ▸ KISS TNC and pair it in Android Bluetooth settings first. "
+                            + "APRS transmit needs your callsign in Settings.\n\n"
+                            + "Meshtastic: close the official Meshtastic app first; no callsign needed.")
                     .setPositiveButton("Settings", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
                     .setNegativeButton("Later", null)
                     .show();
@@ -149,7 +156,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         map.setTileSource(Tiles.byIndex(layerIndex));
         map.setMultiTouchControls(true);
         map.getZoomController().setVisibility(CustomZoomButtonsController.Visibility.NEVER);
-        map.setTilesScaledToDpi(true);
+        applyDetail();
         map.setMinZoomLevel(3.0);
         map.setMaxZoomLevel(19.0);
 
@@ -195,6 +202,18 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         refreshMarkers();
     }
 
+    /**
+     * Map sharpness. Scaling 256 px tiles up by the full screen density (3x on most phones)
+     * makes everything blurry; a smaller factor loads the next zoom level's tiles instead.
+     */
+    private void applyDetail() {
+        float density = getResources().getDisplayMetrics().density;
+        int detail = app.prefs.getInt("detail", 1); // 0 sharp, 1 balanced, 2 large text
+        float factor = detail == 0 ? 1f : detail == 2 ? density : Math.max(1f, density * 0.6f);
+        map.setTilesScaleFactor(factor);
+        map.setTilesScaledToDpi(false); // also re-applies the tile size
+    }
+
     private void chooseLayer() {
         new AlertDialog.Builder(this)
                 .setTitle("Map layer")
@@ -227,7 +246,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             BoundingBox bb = map.getBoundingBox();
             int z = (int) Math.floor(map.getZoomLevelDouble());
             int zMin = Math.max(5, z - 3);
-            int zMax = Math.min(16, z + 3);
+            int zMax = Math.min(Tiles.maxNativeZoom(layerIndex), z + 3);
             int count = cm.possibleTilesInArea(bb, zMin, zMax);
             String size = String.format(Locale.US, "%.0f", count * 0.025); // ~25 KB per tile
             if (count > 25000) {
@@ -274,8 +293,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             Marker m = new Marker(map);
             m.setPosition(new GeoPoint(s.lat, s.lon));
             boolean stale = now - s.time > 30 * 60 * 1000L;
-            int color = stale ? Color.GRAY : Color.parseColor("#FF7CFC00");
-            m.setIcon(labelIcon(s.call, color, false));
+            int color = stale ? Color.GRAY
+                    : "MESH".equals(s.via) ? Color.parseColor("#FFB388FF") : Color.parseColor("#FF7CFC00");
+            m.setIcon(labelIcon(s.label(), color, false));
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
             m.setOnMarkerClickListener((mk, mv) -> { stationTapped(s.call); return true; });
@@ -349,8 +369,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         box.addView(name);
         android.widget.CheckBox share = new android.widget.CheckBox(this);
         share.setText("Share with team over radio");
-        share.setChecked(app.canTransmit());
-        share.setEnabled(app.canTransmit());
+        share.setChecked(app.canShare());
+        share.setEnabled(app.canShare());
         box.addView(share);
 
         new AlertDialog.Builder(this)
@@ -391,13 +411,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         .setItems(actions.toArray(new String[0]), (d2, which) -> {
                             String a = actions.get(which);
                             if (a.startsWith("Share") || a.startsWith("Re-send")) {
-                                if (requireTransmit()) {
+                                if (requireShare()) {
                                     if (app.sharePin(p, true)) toast("Sent " + p.name);
                                 }
                             } else if (a.equals("Rename")) {
                                 renamePin(p);
                             } else if (a.equals("Delete")) {
-                                if (p.isMine() && p.shared && app.canTransmit()) app.sharePin(p, false);
+                                if (p.isMine() && p.shared && app.canShare()) app.sharePin(p, false);
                                 app.store.removePin(p.id);
                                 if (("pin:" + p.id).equals(target)) target = null;
                                 refreshMarkers();
@@ -416,10 +436,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     String n = name.getText().toString().trim();
                     if (n.isEmpty()) return;
                     boolean wasShared = p.shared;
-                    if (wasShared && app.canTransmit()) app.sharePin(p, false);
+                    if (wasShared && app.canShare()) app.sharePin(p, false);
                     p.name = n;
                     app.store.save();
-                    if (wasShared && app.canTransmit()) app.sharePin(p, true);
+                    if (wasShared && app.canShare()) app.sharePin(p, true);
                     refreshMarkers();
                 })
                 .setNegativeButton("Cancel", null)
@@ -435,7 +455,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 + "\nHeard " + Geo.ago(s.time, System.currentTimeMillis())
                 + (s.comment.isEmpty() ? "" : "\n" + s.comment);
         new AlertDialog.Builder(this)
-                .setTitle(call)
+                .setTitle(s.label() + ("MESH".equals(s.via) ? "  (Meshtastic " + s.call + ")" : ""))
                 .setMessage(info)
                 .setPositiveButton("Close", null)
                 .setNeutralButton("Message", (d, w) -> {
@@ -480,7 +500,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             Store.Pin p = app.store.pins.get(target.substring(4));
             return p == null ? "" : p.name;
         }
-        if (target.startsWith("sta:")) return target.substring(4);
+        if (target.startsWith("sta:")) return app.displayName(target.substring(4));
         return "Grid point";
     }
 
@@ -545,7 +565,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         for (Store.Station s : app.store.stations.values()) {
             keys.add("sta:" + s.call);
             dists.add(l == null ? 0 : Geo.distance(l.getLatitude(), l.getLongitude(), s.lat, s.lon));
-            labels.add("● " + s.call + "  " + (l == null ? "" : Geo.rangeBearing(l.getLatitude(), l.getLongitude(), s.lat, s.lon, app.imperial()))
+            labels.add("● " + s.label() + "  " + (l == null ? "" : Geo.rangeBearing(l.getLatitude(), l.getLongitude(), s.lat, s.lon, app.imperial()))
                     + "  · " + Geo.ago(s.time, now));
         }
         for (Store.Pin p : app.store.pins.values()) {
@@ -575,7 +595,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void showMenu() {
         List<String> items = new ArrayList<>();
-        items.add(app.radio.getState() == RadioLink.State.OFF ? "Connect radio (UV-PRO)" : "Disconnect radio");
+        items.add("Radios (UV-PRO / Meshtastic)");
         items.add("Send my position now");
         items.add("Download this area for offline");
         items.add("Clear heard stations");
@@ -585,7 +605,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .setItems(items.toArray(new String[0]), (d, which) -> {
                     switch (which) {
                         case 0: radioTapped(); break;
-                        case 1: if (requireTransmit()) { if (app.beaconNow()) toast("Position sent"); else toast("No GPS fix yet"); } break;
+                        case 1: if (requireShare()) { if (app.beaconNow()) toast("Position sent"); else toast("No GPS fix yet"); } break;
                         case 2: downloadArea(); break;
                         case 3: app.store.clearStations(); refreshMarkers(); break;
                         case 4: startActivity(new Intent(this, LogActivity.class)); break;
@@ -595,7 +615,12 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .show();
     }
 
-    private boolean requireTransmit() {
+    private boolean requireShare() {
+        if (app.canShare()) return true;
+        if (!app.radio.isConnected()) {
+            toast("Connect the UV-PRO or Meshtastic radio first (tap RADIO)");
+            return false;
+        }
         if (!app.hasCallsign()) {
             new AlertDialog.Builder(this)
                     .setTitle("Callsign needed")
@@ -614,9 +639,40 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     // ---------- radio ----------
 
     private void radioTapped() {
+        String aprs = "UV-PRO (APRS): " + stateWord(app.radio.getState())
+                + (app.radio.isConnected() ? " · " + app.radio.deviceName() : "");
+        String mesh = "Meshtastic: " + stateWord(app.mesh.getState())
+                + (app.mesh.isConnected() ? " · " + app.mesh.deviceName() : "");
+        new AlertDialog.Builder(this)
+                .setTitle("Radios")
+                .setItems(new String[]{aprs, mesh}, (d, which) -> {
+                    if (which == 0) aprsTapped(); else meshTapped();
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private static String stateWord(RadioLink.State s) {
+        switch (s) {
+            case CONNECTED: return "ON";
+            case CONNECTING: return "connecting…";
+            case RETRYING: return "reconnecting…";
+            default: return "off — tap to connect";
+        }
+    }
+
+    private BluetoothAdapter adapterOrToast() {
+        BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = bm == null ? null : bm.getAdapter();
+        if (adapter == null) { toast("This phone has no Bluetooth"); return null; }
+        if (!adapter.isEnabled()) { toast("Turn on Bluetooth first"); return null; }
+        return adapter;
+    }
+
+    private void aprsTapped() {
         if (app.radio.getState() != RadioLink.State.OFF) {
             new AlertDialog.Builder(this)
-                    .setTitle("Radio")
+                    .setTitle("UV-PRO (APRS)")
                     .setMessage(radioSummary())
                     .setPositiveButton("Disconnect", (d, w) -> app.radio.disconnect())
                     .setNegativeButton("Close", null).show();
@@ -627,10 +683,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BLUETOOTH_CONNECT}, REQ_BT);
             return;
         }
-        BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-        BluetoothAdapter adapter = bm == null ? null : bm.getAdapter();
-        if (adapter == null) { toast("This phone has no Bluetooth"); return; }
-        if (!adapter.isEnabled()) { toast("Turn on Bluetooth first"); return; }
+        BluetoothAdapter adapter = adapterOrToast();
+        if (adapter == null) return;
         Set<BluetoothDevice> bonded = adapter.getBondedDevices();
         final List<BluetoothDevice> devices = new ArrayList<>(bonded);
         Collections.sort(devices, (a, b) -> {
@@ -651,7 +705,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         String[] names = new String[devices.size()];
         for (int i = 0; i < names.length; i++) names[i] = safeName(devices.get(i)) + "\n" + devices.get(i).getAddress();
         new AlertDialog.Builder(this)
-                .setTitle("Connect to radio")
+                .setTitle("Connect to UV-PRO")
                 .setItems(names, (d, which) -> {
                     BluetoothDevice dev = devices.get(which);
                     app.prefs.edit().putString("lastRadio", dev.getAddress()).apply();
@@ -660,6 +714,93 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .setNegativeButton("Cancel", null)
                 .show();
         toastOnce("kissHint", "Make sure KISS TNC is ON in the UV-PRO menu (and the BTECH app is closed)");
+    }
+
+    // ---------- Meshtastic ----------
+
+    private void meshTapped() {
+        if (app.mesh.getState() != RadioLink.State.OFF) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Meshtastic")
+                    .setMessage("State: " + app.mesh.getState() + "\nDevice: " + app.mesh.deviceName()
+                            + "\nMy node: " + (app.myNodeNum == 0 ? "?" : app.fieldmap.core.Mesh.nodeId(app.myNodeNum))
+                            + "\nPackets received: " + app.mesh.rxCount + "\nPackets sent: " + app.mesh.txCount)
+                    .setPositiveButton("Disconnect", (d, w) -> app.mesh.disconnect())
+                    .setNegativeButton("Close", null).show();
+            return;
+        }
+        List<String> need = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 31) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
+                need.add(Manifest.permission.BLUETOOTH_SCAN);
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+                need.add(Manifest.permission.BLUETOOTH_CONNECT);
+        } else if (!hasLocationPermission()) {
+            need.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (!need.isEmpty()) {
+            ActivityCompat.requestPermissions(this, need.toArray(new String[0]), REQ_MESH);
+            return;
+        }
+        BluetoothAdapter adapter = adapterOrToast();
+        if (adapter == null) return;
+        scanForMesh(adapter);
+    }
+
+    private void scanForMesh(BluetoothAdapter adapter) {
+        final List<BluetoothDevice> found = new ArrayList<>();
+        // already-paired Meshtastic devices first
+        for (BluetoothDevice d : adapter.getBondedDevices()) {
+            String n = safeName(d).toLowerCase(Locale.US);
+            if (n.contains("meshtastic") || n.contains("heltec") || n.contains("_")) found.add(d);
+        }
+        BluetoothLeScanner scanner = adapter.getBluetoothLeScanner();
+        if (scanner == null) { toast("Bluetooth LE scanning isn't available"); return; }
+        final AlertDialog searching = new AlertDialog.Builder(this)
+                .setTitle("Searching for Meshtastic radios…")
+                .setMessage("Make sure the Heltec is powered on and Bluetooth is enabled in its Meshtastic settings.")
+                .setNegativeButton("Cancel", null)
+                .show();
+        final ScanCallback cb = new ScanCallback() {
+            @Override public void onScanResult(int callbackType, ScanResult result) {
+                BluetoothDevice d = result.getDevice();
+                for (BluetoothDevice f : found) if (f.getAddress().equals(d.getAddress())) return;
+                found.add(d);
+                searching.setMessage("Found " + found.size() + "…");
+            }
+        };
+        List<ScanFilter> filters = new ArrayList<>();
+        filters.add(new ScanFilter.Builder().setServiceUuid(new ParcelUuid(MeshLink.SERVICE)).build());
+        ScanSettings settings = new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
+        try {
+            scanner.startScan(filters, settings, cb);
+        } catch (SecurityException e) {
+            searching.dismiss();
+            toast("Bluetooth scan permission is off");
+            return;
+        }
+        map.postDelayed(() -> {
+            try { scanner.stopScan(cb); } catch (Exception ignored) { }
+            if (!searching.isShowing()) return;
+            searching.dismiss();
+            if (found.isEmpty()) {
+                new AlertDialog.Builder(this)
+                        .setTitle("No Meshtastic radio found")
+                        .setMessage("Check that the radio is on and close the official Meshtastic app (only one app can connect at a time). Then try again.")
+                        .setPositiveButton("OK", null).show();
+                return;
+            }
+            String[] names = new String[found.size()];
+            for (int i = 0; i < names.length; i++) names[i] = safeName(found.get(i)) + "\n" + found.get(i).getAddress();
+            new AlertDialog.Builder(this)
+                    .setTitle("Connect to Meshtastic")
+                    .setItems(names, (d, which) -> {
+                        app.mesh.connect(found.get(which));
+                        toastOnce("meshPin", "If Android asks for a PIN, use the one shown on the Heltec's screen (default 123456)");
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }, 6000);
     }
 
     private static boolean looksLikeRadio(BluetoothDevice d) {
@@ -686,6 +827,17 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void updateRadioStatus() {
         RadioLink.State s = app.radio.getState();
+        RadioLink.State ms = app.mesh.getState();
+        if (ms != RadioLink.State.OFF) {
+            String a = s == RadioLink.State.CONNECTED ? "APRS ✓" : s == RadioLink.State.OFF ? "APRS –" : "APRS …";
+            String m = ms == RadioLink.State.CONNECTED ? "MESH ✓" : "MESH …";
+            radioStatus.setText("● " + a + "  " + m + " · RX " + (app.radio.rxCount + app.mesh.rxCount));
+            boolean anyOn = s == RadioLink.State.CONNECTED || ms == RadioLink.State.CONNECTED;
+            radioStatus.setTextColor(ContextCompat.getColor(this, anyOn ? R.color.accent : R.color.warn));
+            int unread = app.store.unread;
+            btnChat.setText(unread > 0 ? "Chat (" + unread + ")" : "Chat");
+            return;
+        }
         String txt;
         int color;
         switch (s) {
@@ -784,8 +936,14 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (requestCode == REQ_LOCATION && hasLocationPermission()) startLocation();
         if (requestCode == REQ_BT) {
-            if (granted) radioTapped();
+            if (granted) aprsTapped();
             else toast("Bluetooth permission is needed to talk to the radio");
+        }
+        if (requestCode == REQ_MESH) {
+            boolean all = grantResults.length > 0;
+            for (int g : grantResults) all &= g == PackageManager.PERMISSION_GRANTED;
+            if (all) meshTapped();
+            else toast("Bluetooth permissions are needed to find the Meshtastic radio");
         }
     }
 
@@ -793,6 +951,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     protected void onResume() {
         super.onResume();
         map.onResume();
+        applyDetail();
         app.addListener(this);
         if (app.prefs.getBoolean("keepOn", false)) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
