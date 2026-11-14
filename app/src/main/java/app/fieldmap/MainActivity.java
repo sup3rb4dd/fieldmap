@@ -276,13 +276,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         map.getOverlays().add(scale);
 
         float dd = getResources().getDisplayMetrics().density;
-        trailLine = new Polyline();
+        trailLine = new PassiveLine();
         trailLine.getOutlinePaint().setColor(Color.parseColor("#B339FF14"));
         trailLine.getOutlinePaint().setStrokeWidth(2f * dd);
         trailLine.setInfoWindow(null);
         map.getOverlays().add(trailLine);
 
-        rangeLine = new Polyline();
+        rangeLine = new PassiveLine();
         rangeLine.getOutlinePaint().setColor(Color.parseColor("#FFFFB000"));
         rangeLine.getOutlinePaint().setStrokeWidth(2.5f * dd);
         rangeLine.getOutlinePaint().setPathEffect(new android.graphics.DashPathEffect(new float[]{10 * dd, 6 * dd}, 0));
@@ -914,7 +914,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             m.setInfoWindow(null);
             String key = "pin:" + p.id;
             m.setOnMarkerClickListener((mk, mv) -> {
-                if (tools.drawing) tools.addPoint(p.lat, p.lon); else pinTapped(p.id);
+                if (tools.drawing) return false;
+                pinTapped(p.id);
                 return true;
             });
             itemOverlays.add(m);
@@ -930,7 +931,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     : "MESH".equals(s.via) ? Color.parseColor("#FF00E5FF")
                     : "TAK".equals(s.via) ? Color.parseColor("#FF7FB2FF") : Color.parseColor("#FF39FF14");
             if (trails && s.trail.size() > 1) {
-                Polyline tl = new Polyline();
+                Polyline tl = new PassiveLine();
                 List<GeoPoint> tp = new ArrayList<>();
                 for (double[] q : s.trail) tp.add(new GeoPoint(q[0], q[1]));
                 tl.setPoints(tp);
@@ -943,7 +944,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
             m.setOnMarkerClickListener((mk, mv) -> {
-                if (tools.drawing) tools.addPoint(s.lat, s.lon); else stationTapped(s.call);
+                if (tools.drawing) return false;
+                stationTapped(s.call);
                 return true;
             });
             itemOverlays.add(m);

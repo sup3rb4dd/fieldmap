@@ -77,6 +77,64 @@ class MapTools {
 
     private boolean zoneMode = false;
     private Polygon draftFill;
+    private Overlay draftTop;
+
+    /**
+     * Sits above everything else while drawing. It takes every tap (so pins, lines and shaded
+     * areas underneath can't swallow or redirect one) and draws a dot on each corner placed.
+     */
+    private class DraftOverlay extends Overlay {
+        private final android.graphics.Paint dot = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG),
+                ring = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Point px = new android.graphics.Point();
+
+        DraftOverlay() {
+            dot.setColor(Color.WHITE);
+            ring.setStyle(android.graphics.Paint.Style.STROKE);
+            ring.setStrokeWidth(2 * dd);
+            ring.setColor(Color.BLACK);
+        }
+
+        @Override
+        public boolean onSingleTapConfirmed(android.view.MotionEvent e, MapView mv) {
+            if (!drawing) return false;
+            org.osmdroid.api.IGeoPoint g = mv.getProjection().fromPixels((int) e.getX(), (int) e.getY());
+            tapped(g.getLatitude(), g.getLongitude());
+            return true;
+        }
+
+        @Override
+        public boolean onLongPress(android.view.MotionEvent e, MapView mv) { return drawing; }
+
+        @Override
+        public void draw(android.graphics.Canvas c, org.osmdroid.views.Projection proj) {
+            if (!drawing) return;
+            for (int i = 0; i < draft.size(); i++) {
+                proj.toPixels(new GeoPoint(draft.get(i)[0], draft.get(i)[1]), px);
+                // in zone mode the first corner is bigger: tap it to close the zone
+                boolean closer = zoneMode && i == 0 && draft.size() >= 3;
+                float r = (closer ? 9 : 5) * dd;
+                dot.setColor(closer ? Color.parseColor("#FF39FF14") : Color.WHITE);
+                c.drawCircle(px.x, px.y, r, dot);
+                c.drawCircle(px.x, px.y, r, ring);
+            }
+        }
+    }
+
+    /** Meters covered by one screen pixel at this spot and zoom. */
+    private double metersPerPixel(double lat) {
+        return 40075016.686 * Math.cos(Math.toRadians(lat))
+                / (org.osmdroid.util.TileSystem.getTileSize() * Math.pow(2, map.getZoomLevelDouble()));
+    }
+
+    private void tapped(double lat, double lon) {
+        if (zoneMode && draft.size() >= 3) {
+            double[] first = draft.get(0);
+            // a tap on (or close to) the first corner closes the zone
+            if (Geo.distance(first[0], first[1], lat, lon) < 30 * dd * metersPerPixel(lat)) { finishDraw(); return; }
+        }
+        addPoint(lat, lon);
+    }
 
     /** Asks what is being drawn, then starts. */
     void chooseDraw() {
@@ -94,14 +152,16 @@ class MapTools {
         drawing = true;
         draft.clear();
         if (draftFill == null) {
-            draftFill = new Polygon(map);
+            draftFill = new Polygon(map) {
+                @Override public boolean onSingleTapConfirmed(android.view.MotionEvent e, MapView mv) { return false; }
+            };
             draftFill.getFillPaint().setColor(0x40FFFFFF);
             draftFill.getOutlinePaint().setColor(0x00000000);
             draftFill.setInfoWindow(null);
         }
         if (!map.getOverlays().contains(draftFill)) map.getOverlays().add(draftFill);
         if (draftLine == null) {
-            draftLine = new Polyline();
+            draftLine = new PassiveLine();
             draftLine.getOutlinePaint().setColor(Color.WHITE);
             draftLine.getOutlinePaint().setStrokeWidth(3 * dd);
             draftLine.getOutlinePaint().setPathEffect(new DashPathEffect(new float[]{6 * dd, 6 * dd}, 0));
@@ -109,7 +169,7 @@ class MapTools {
         }
         if (leadLine == null) {
             // thinner, fainter line from the last point to the crosshair: where the next segment will go
-            leadLine = new Polyline();
+            leadLine = new PassiveLine();
             leadLine.getOutlinePaint().setColor(Color.parseColor("#CCFFFFFF"));
             leadLine.getOutlinePaint().setStrokeWidth(1.5f * dd);
             leadLine.getOutlinePaint().setPathEffect(new DashPathEffect(new float[]{3 * dd, 5 * dd}, 0));
@@ -117,8 +177,12 @@ class MapTools {
         }
         if (!map.getOverlays().contains(draftLine)) map.getOverlays().add(draftLine);
         if (!map.getOverlays().contains(leadLine)) map.getOverlays().add(leadLine);
+        // always the top layer, so it sees taps first
+        if (draftTop == null) draftTop = new DraftOverlay();
+        map.getOverlays().remove(draftTop);
+        map.getOverlays().add(draftTop);
         updateDraw();
-        a.toastOnce("draw", "Tap the map to add points. For precision, put the crosshair on a spot and press +WPT. Tapping a pin snaps to it.");
+        a.toastOnce("draw2", "Tap the map to add points, or put the crosshair on a spot and press +WPT. For a zone, tap the green first corner (or DONE) to close it.");
     }
 
     void addPoint(double lat, double lon) {
@@ -135,6 +199,7 @@ class MapTools {
 
     void cancelDraw() {
         drawing = false;
+        if (draftTop != null) map.getOverlays().remove(draftTop);
         draft.clear();
         updateDraw();
     }
