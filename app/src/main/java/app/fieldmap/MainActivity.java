@@ -89,6 +89,12 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         app = FieldMapApp.get();
         Configuration.getInstance().load(this, getSharedPreferences("osmdroid", MODE_PRIVATE));
         Configuration.getInstance().setUserAgentValue(getPackageName());
+        // keep map tiles in app storage (works on all Android versions, no storage permission)
+        java.io.File base = new java.io.File(getFilesDir(), "osmdroid");
+        Configuration.getInstance().setOsmdroidBasePath(base);
+        Configuration.getInstance().setOsmdroidTileCache(new java.io.File(base, "tiles"));
+        Configuration.getInstance().setTileFileSystemCacheMaxBytes(3000L * 1024 * 1024);
+        Configuration.getInstance().setTileFileSystemCacheTrimBytes(2800L * 1024 * 1024);
         setContentView(R.layout.activity_main);
 
         map = findViewById(R.id.map);
