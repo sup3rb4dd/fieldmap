@@ -298,8 +298,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         map.getOverlays().add(myLocOverlay);
 
         map.addMapListener(new MapListener() {
-            @Override public boolean onScroll(ScrollEvent event) { updateCenterText(); return false; }
-            @Override public boolean onZoom(ZoomEvent event) { updateCenterText(); return false; }
+            @Override public boolean onScroll(ScrollEvent event) { updateCenterText(); tools.onMapMoved(); return false; }
+            @Override public boolean onZoom(ZoomEvent event) { updateCenterText(); tools.onMapMoved(); return false; }
         });
         refreshMarkers();
     }

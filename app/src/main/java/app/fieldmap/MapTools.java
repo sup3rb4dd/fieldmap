@@ -70,7 +70,7 @@ class MapTools {
 
     boolean drawing = false;
     private final List<double[]> draft = new ArrayList<>();
-    private Polyline draftLine;
+    private Polyline draftLine, leadLine;
     private final View drawRow;
     private final TextView tvDraw;
     private final Button btnDraw;
@@ -85,7 +85,16 @@ class MapTools {
             draftLine.getOutlinePaint().setPathEffect(new DashPathEffect(new float[]{6 * dd, 6 * dd}, 0));
             draftLine.setInfoWindow(null);
         }
+        if (leadLine == null) {
+            // thinner, fainter line from the last point to the crosshair: where the next segment will go
+            leadLine = new Polyline();
+            leadLine.getOutlinePaint().setColor(Color.parseColor("#CCFFFFFF"));
+            leadLine.getOutlinePaint().setStrokeWidth(1.5f * dd);
+            leadLine.getOutlinePaint().setPathEffect(new DashPathEffect(new float[]{3 * dd, 5 * dd}, 0));
+            leadLine.setInfoWindow(null);
+        }
         if (!map.getOverlays().contains(draftLine)) map.getOverlays().add(draftLine);
+        if (!map.getOverlays().contains(leadLine)) map.getOverlays().add(leadLine);
         updateDraw();
         a.toastOnce("draw", "Tap the map to add points. For precision, put the crosshair on a spot and press +WPT. Tapping a pin snaps to it.");
     }
@@ -117,11 +126,35 @@ class MapTools {
             draftLine.setPoints(gp);
             draftLine.setVisible(drawing && draft.size() >= 2);
         }
-        if (drawing) {
-            tvDraw.setText(draft.isEmpty() ? "DRAW · TAP THE MAP"
-                    : "DRAW · " + draft.size() + " PTS · " + Geo.formatDistance(Shapes.length(draft, false), app.imperial()).toUpperCase(Locale.US));
-        }
+        updateLead();
         map.invalidate();
+    }
+
+    /** Called whenever the map moves: keeps the lead line stretched from the last point to the crosshair. */
+    void onMapMoved() {
+        if (!drawing) return;
+        updateLead();
+        map.invalidate();
+    }
+
+    private void updateLead() {
+        if (leadLine == null) return;
+        if (!drawing || draft.isEmpty()) {
+            leadLine.setVisible(false);
+            if (drawing) tvDraw.setText("DRAW · TAP THE MAP");
+            return;
+        }
+        double[] last = draft.get(draft.size() - 1);
+        org.osmdroid.api.IGeoPoint c = map.getMapCenter();
+        List<GeoPoint> gp = new ArrayList<>();
+        gp.add(new GeoPoint(last[0], last[1]));
+        gp.add(new GeoPoint(c.getLatitude(), c.getLongitude()));
+        leadLine.setPoints(gp);
+        leadLine.setVisible(true);
+        double next = Geo.distance(last[0], last[1], c.getLatitude(), c.getLongitude());
+        tvDraw.setText("DRAW · " + draft.size() + " PTS · " + Geo.formatDistance(Shapes.length(draft, false), app.imperial()).toUpperCase(Locale.US)
+                + "\nNEXT +" + Geo.formatDistance(next, app.imperial()).toUpperCase(Locale.US)
+                + String.format(Locale.US, " @ %03.0f°", Geo.bearing(last[0], last[1], c.getLatitude(), c.getLongitude())));
     }
 
     private void finishDraw() {
