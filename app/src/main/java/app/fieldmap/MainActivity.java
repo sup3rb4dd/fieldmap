@@ -391,9 +391,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         for (Store.Pin p : app.store.pins.values()) {
             Marker m = new Marker(map);
             m.setPosition(new GeoPoint(p.lat, p.lon));
-            int color = p.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FFFF6EC7");
+            int color = p.place ? Color.parseColor("#FFF2F2F2")
+                    : p.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FFFF6EC7");
             String label = p.isMine() ? p.name : p.name + " (" + p.owner + ")";
-            m.setIcon(labelIcon(label, color, true));
+            m.setIcon(labelIcon(label, color, p.place ? 2 : 1));
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
             String key = "pin:" + p.id;
@@ -406,7 +407,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             boolean stale = now - s.time > 30 * 60 * 1000L;
             int color = stale ? Color.GRAY
                     : "MESH".equals(s.via) ? Color.parseColor("#FF00E5FF") : Color.parseColor("#FF39FF14");
-            m.setIcon(labelIcon(s.label(), color, false));
+            m.setIcon(labelIcon(s.label(), color, 0));
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
             m.setOnMarkerClickListener((mk, mv) -> { stationTapped(s.call); return true; });
@@ -455,7 +456,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     }
 
     /** Diamond (waypoint) or bracketed square (station) with a monospace tag under it. */
-    private Drawable labelIcon(String label, int color, boolean diamond) {
+    /** shape: 0 = station square, 1 = waypoint diamond, 2 = saved place (house). */
+    private Drawable labelIcon(String label, int color, int shape) {
         float d = getResources().getDisplayMetrics().density;
         label = label.toUpperCase(Locale.US);
         Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -477,7 +479,22 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         edge.setStyle(Paint.Style.STROKE);
         edge.setStrokeWidth(2 * d);
         float r = sym / 2f - 2 * d;
-        if (diamond) {
+        if (shape == 2) {
+            Path house = new Path();
+            house.moveTo(cx, cy - r);                 // roof peak
+            house.lineTo(cx + r, cy - r * 0.05f);
+            house.lineTo(cx + r * 0.72f, cy - r * 0.05f);
+            house.lineTo(cx + r * 0.72f, cy + r * 0.85f);
+            house.lineTo(cx - r * 0.72f, cy + r * 0.85f);
+            house.lineTo(cx - r * 0.72f, cy - r * 0.05f);
+            house.lineTo(cx - r, cy - r * 0.05f);
+            house.close();
+            c.drawPath(house, edge);
+            c.drawPath(house, fill);
+            Paint door = new Paint();
+            door.setColor(Color.BLACK);
+            c.drawRect(cx - r * 0.2f, cy + r * 0.25f, cx + r * 0.2f, cy + r * 0.85f, door);
+        } else if (shape == 1) {
             Path path = new Path();
             path.moveTo(cx, cy - r); path.lineTo(cx + r, cy); path.lineTo(cx, cy + r); path.lineTo(cx - r, cy); path.close();
             c.drawPath(path, fill);
@@ -517,24 +534,32 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         EditText name = new EditText(this);
         name.setHint("Name (max 9 chars to share)");
         name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-        name.setText("PIN" + (app.store.pins.size() + 1));
+        name.setText("WPT" + (app.store.pins.size() + 1));
         name.selectAll();
         box.addView(name);
+        android.widget.CheckBox place = new android.widget.CheckBox(this);
+        place.setText("Saved place (home, family…) — private, never sent");
+        box.addView(place);
         android.widget.CheckBox share = new android.widget.CheckBox(this);
         share.setText("Share with team over radio");
-        share.setChecked(app.canShare());
+        share.setChecked(false);
         share.setEnabled(app.canShare());
         box.addView(share);
+        place.setOnCheckedChangeListener((b, on) -> {
+            share.setEnabled(!on && app.canShare());
+            if (on) share.setChecked(false);
+        });
 
         new AlertDialog.Builder(this)
                 .setTitle("// MARK WAYPOINT")
                 .setView(box)
                 .setPositiveButton("Save", (d, w) -> {
                     String n = name.getText().toString().trim();
-                    if (n.isEmpty()) n = "PIN";
+                    if (n.isEmpty()) n = "WPT";
                     Store.Pin p = app.store.addMyPin(n, lat, lon);
-                    if (share.isChecked()) app.sharePin(p, true);
-                    target = "pin:" + p.id;
+                    p.place = place.isChecked();
+                    app.store.save();
+                    if (share.isChecked() && !p.place) app.sharePin(p, true);
                     refreshMarkers();
                 })
                 .setNegativeButton("Cancel", null)
@@ -544,23 +569,26 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private void pinTapped(String id) {
         Store.Pin p = app.store.pins.get(id);
         if (p == null) return;
-        target = "pin:" + id;
-        refreshTarget();
         String info = Mgrs.format(p.lat, p.lon) + "\n" + rangeFromMe(p.lat, p.lon)
+                + (p.place ? "\nSaved place · private" : "")
                 + (p.isMine() ? "" : "\nFrom " + p.owner + " · " + Geo.ago(p.time, System.currentTimeMillis()))
                 + (p.comment == null || p.comment.isEmpty() ? "" : "\n" + p.comment);
         List<String> actions = new ArrayList<>();
-        if (p.isMine()) {
-            actions.add(p.shared ? "Re-send to team" : "Share with team");
-            actions.add("Rename");
-        }
+        if (p.isMine() && !p.place) actions.add(p.shared ? "Re-send to team" : "Share with team");
+        if (p.isMine()) actions.add("Rename");
+        if (p.isMine()) actions.add(p.place ? "Make it a waypoint" : "Make it a saved place");
         actions.add("Delete");
+        boolean tracking = ("pin:" + id).equals(target);
         new AlertDialog.Builder(this)
-                .setTitle(p.name)
+                .setTitle(p.name.toUpperCase(Locale.US))
                 .setMessage(info)
-                .setPositiveButton("Close", null)
+                .setPositiveButton(tracking ? "Stop track" : "Track", (d, w) -> {
+                    target = tracking ? null : "pin:" + id;
+                    refreshTarget();
+                })
+                .setNegativeButton("Close", null)
                 .setNeutralButton("More…", (d, w) -> new AlertDialog.Builder(this)
-                        .setTitle(p.name)
+                        .setTitle(p.name.toUpperCase(Locale.US))
                         .setItems(actions.toArray(new String[0]), (d2, which) -> {
                             String a = actions.get(which);
                             if (a.startsWith("Share") || a.startsWith("Re-send")) {
@@ -569,6 +597,16 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                                 }
                             } else if (a.equals("Rename")) {
                                 renamePin(p);
+                            } else if (a.startsWith("Make it a saved place")) {
+                                if (p.shared && app.canShare()) app.sharePin(p, false);
+                                p.place = true;
+                                p.shared = false;
+                                app.store.save();
+                                refreshMarkers();
+                            } else if (a.startsWith("Make it a waypoint")) {
+                                p.place = false;
+                                app.store.save();
+                                refreshMarkers();
                             } else if (a.equals("Delete")) {
                                 if (p.isMine() && p.shared && app.canShare()) app.sharePin(p, false);
                                 app.store.removePin(p.id);
@@ -602,15 +640,17 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private void stationTapped(String call) {
         Store.Station s = app.store.stations.get(call);
         if (s == null) return;
-        target = "sta:" + call;
-        refreshTarget();
         String info = Mgrs.format(s.lat, s.lon) + "\n" + rangeFromMe(s.lat, s.lon)
                 + "\nHeard " + Geo.ago(s.time, System.currentTimeMillis())
                 + (s.comment.isEmpty() ? "" : "\n" + s.comment);
+        boolean tracking = ("sta:" + call).equals(target);
         new AlertDialog.Builder(this)
-                .setTitle(s.label() + ("MESH".equals(s.via) ? "  (Meshtastic " + s.call + ")" : ""))
+                .setTitle(s.label().toUpperCase(Locale.US) + ("MESH".equals(s.via) ? "  (" + s.call + ")" : ""))
                 .setMessage(info)
-                .setPositiveButton("Close", null)
+                .setPositiveButton(tracking ? "Stop track" : "Track", (d, w) -> {
+                    target = tracking ? null : "sta:" + call;
+                    refreshTarget();
+                })
                 .setNeutralButton("Message", (d, w) -> {
                     Intent i = new Intent(this, ChatActivity.class);
                     i.putExtra("to", call);
@@ -724,7 +764,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         for (Store.Pin p : app.store.pins.values()) {
             keys.add("pin:" + p.id);
             dists.add(l == null ? 0 : Geo.distance(l.getLatitude(), l.getLongitude(), p.lat, p.lon));
-            labels.add("◆ " + p.name + "  " + (l == null ? "" : Geo.rangeBearing(l.getLatitude(), l.getLongitude(), p.lat, p.lon, app.imperial())));
+            labels.add((p.place ? "⌂ " : "◆ ") + p.name + "  " + (l == null ? "" : Geo.rangeBearing(l.getLatitude(), l.getLongitude(), p.lat, p.lon, app.imperial())));
         }
         if (keys.isEmpty()) { toast("No pins or stations yet"); return; }
         Integer[] order = new Integer[keys.size()];
@@ -735,10 +775,14 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         new AlertDialog.Builder(this)
                 .setTitle("// TRACKS & WAYPOINTS — NEAREST")
                 .setItems(items, (d, which) -> {
-                    target = keys.get(order[which]);
+                    String key = keys.get(order[which]);
+                    if (key.startsWith("pin:")) pinTapped(key.substring(4));
+                    else stationTapped(key.substring(4));
+                    String keep = target;
+                    target = key;
                     double[] t = targetPosition();
+                    target = keep;
                     if (t != null) map.getController().animateTo(new GeoPoint(t[0], t[1]));
-                    refreshTarget();
                 })
                 .setNegativeButton("Close", null)
                 .show();

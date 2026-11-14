@@ -231,6 +231,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     private int newPacketId() { return rnd.nextInt(Integer.MAX_VALUE - 1) + 1; }
 
     public boolean sharePin(Store.Pin p, boolean live) {
+        if (p.place && live) { log("Not sent: " + p.name + " is a private saved place"); return false; }
         boolean ok = false;
         if (canTransmit() && aprsTeam()) ok = sendInfo(Aprs.object(p.name, p.lat, p.lon, '\\', 'A', p.comment, live));
         if (mesh.isConnected()) {

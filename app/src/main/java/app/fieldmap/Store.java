@@ -25,6 +25,7 @@ public class Store {
         public long time;
         public boolean shared;     // I have sent it over the radio
         public int meshId;         // Meshtastic waypoint id for my pins (0 = not assigned yet)
+        public boolean place;      // saved place (home, family): local only, never transmitted
 
         public boolean isMine() { return owner == null || owner.isEmpty(); }
     }
@@ -186,7 +187,7 @@ public class Store {
             for (Pin p : pins.values()) {
                 JSONObject o = new JSONObject();
                 o.put("id", p.id); o.put("name", p.name); o.put("lat", p.lat); o.put("lon", p.lon);
-                o.put("owner", p.owner); o.put("comment", p.comment); o.put("time", p.time); o.put("shared", p.shared); o.put("meshId", p.meshId);
+                o.put("owner", p.owner); o.put("comment", p.comment); o.put("time", p.time); o.put("shared", p.shared); o.put("meshId", p.meshId); o.put("place", p.place);
                 jp.put(o);
             }
             JSONArray js = new JSONArray();
@@ -220,6 +221,7 @@ public class Store {
                 p.owner = o.optString("owner"); p.comment = o.optString("comment"); p.time = o.optLong("time");
                 p.shared = o.optBoolean("shared");
                 p.meshId = o.optInt("meshId");
+                p.place = o.optBoolean("place");
                 pins.put(p.id, p);
             }
             JSONArray js = new JSONArray(sp.getString("stations", "[]"));
