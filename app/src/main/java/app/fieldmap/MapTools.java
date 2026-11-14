@@ -58,7 +58,7 @@ class MapTools {
         drawRow = a.findViewById(R.id.drawRow);
         tvDraw = a.findViewById(R.id.tvDraw);
         btnDraw = a.findViewById(R.id.btnDraw);
-        btnDraw.setOnClickListener(v -> { if (drawing) finishDraw(); else startDraw(); });
+        btnDraw.setOnClickListener(v -> { if (drawing) finishDraw(); else chooseDraw(); });
         a.findViewById(R.id.btnUndo).setOnClickListener(v -> undo());
         a.findViewById(R.id.btnDone).setOnClickListener(v -> finishDraw());
         a.findViewById(R.id.btnDrawCancel).setOnClickListener(v -> cancelDraw());
@@ -75,9 +75,31 @@ class MapTools {
     private final TextView tvDraw;
     private final Button btnDraw;
 
+    private boolean zoneMode = false;
+    private Polygon draftFill;
+
+    /** Asks what is being drawn, then starts. */
+    void chooseDraw() {
+        new AlertDialog.Builder(a)
+                .setTitle("// DRAW")
+                .setItems(new String[]{"Route (a line to follow or measure)", "Zone (a shaded area)"}, (d, which) -> {
+                    zoneMode = which == 1;
+                    startDraw();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     void startDraw() {
         drawing = true;
         draft.clear();
+        if (draftFill == null) {
+            draftFill = new Polygon(map);
+            draftFill.getFillPaint().setColor(0x40FFFFFF);
+            draftFill.getOutlinePaint().setColor(0x00000000);
+            draftFill.setInfoWindow(null);
+        }
+        if (!map.getOverlays().contains(draftFill)) map.getOverlays().add(draftFill);
         if (draftLine == null) {
             draftLine = new Polyline();
             draftLine.getOutlinePaint().setColor(Color.WHITE);
@@ -137,11 +159,26 @@ class MapTools {
         map.invalidate();
     }
 
+    /** Zone preview: shades the area as it would be if the crosshair were the next corner. */
+    private void updateFill() {
+        if (draftFill == null) return;
+        boolean show = drawing && zoneMode && draft.size() >= 2;
+        if (show) {
+            List<GeoPoint> gp = new ArrayList<>();
+            for (double[] p : draft) gp.add(new GeoPoint(p[0], p[1]));
+            org.osmdroid.api.IGeoPoint c = map.getMapCenter();
+            gp.add(new GeoPoint(c.getLatitude(), c.getLongitude()));
+            draftFill.setPoints(gp);
+        }
+        draftFill.setVisible(show);
+    }
+
     private void updateLead() {
+        updateFill();
         if (leadLine == null) return;
         if (!drawing || draft.isEmpty()) {
             leadLine.setVisible(false);
-            if (drawing) tvDraw.setText("DRAW · TAP THE MAP");
+            if (drawing) tvDraw.setText(zoneMode ? "ZONE · TAP THE CORNERS" : "DRAW · TAP THE MAP");
             return;
         }
         double[] last = draft.get(draft.size() - 1);
@@ -152,7 +189,9 @@ class MapTools {
         leadLine.setPoints(gp);
         leadLine.setVisible(true);
         double next = Geo.distance(last[0], last[1], c.getLatitude(), c.getLongitude());
-        tvDraw.setText("DRAW · " + draft.size() + " PTS · " + Geo.formatDistance(Shapes.length(draft, false), app.imperial()).toUpperCase(Locale.US)
+        tvDraw.setText((zoneMode ? "ZONE · " : "DRAW · ") + draft.size() + " PTS · "
+                + (zoneMode && draft.size() >= 3 ? Shapes.formatArea(Shapes.area(draft), app.imperial()).toUpperCase(Locale.US)
+                : Geo.formatDistance(Shapes.length(draft, false), app.imperial()).toUpperCase(Locale.US))
                 + "\nNEXT +" + Geo.formatDistance(next, app.imperial()).toUpperCase(Locale.US)
                 + String.format(Locale.US, " @ %03.0f°", Geo.bearing(last[0], last[1], c.getLatitude(), c.getLongitude())));
     }
@@ -167,20 +206,23 @@ class MapTools {
         final EditText name = new EditText(a);
         name.setHint("Name");
         name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-        name.setText("RTE" + (app.store.shapes.size() + 1));
+        name.setText((zoneMode ? "ZONE" : "RTE") + (app.store.shapes.size() + 1));
         name.selectAll();
         box.addView(name);
         final RadioGroup kind = new RadioGroup(a);
         final RadioButton route = new RadioButton(a), area = new RadioButton(a);
         route.setText("Route · " + Geo.formatDistance(Shapes.length(pts, false), app.imperial()));
-        area.setText(pts.size() >= 3 ? "Area · " + Shapes.formatArea(Shapes.area(pts), app.imperial()) : "Area (needs 3 points)");
+        area.setText(pts.size() >= 3 ? "Zone (shaded area) · " + Shapes.formatArea(Shapes.area(pts), app.imperial()) : "Zone (needs 3 points)");
         area.setEnabled(pts.size() >= 3);
         route.setId(View.generateViewId());
         area.setId(View.generateViewId());
         kind.addView(route);
         kind.addView(area);
-        kind.check(route.getId());
+        kind.check(zoneMode && pts.size() >= 3 ? area.getId() : route.getId());
         box.addView(kind);
+        final android.widget.Spinner color = new android.widget.Spinner(a);
+        color.setAdapter(new android.widget.ArrayAdapter<>(a, android.R.layout.simple_spinner_dropdown_item, COLOR_NAMES));
+        box.addView(color);
         final CheckBox share = new CheckBox(a);
         boolean can = app.mesh.isConnected() || app.tak.isConnected();
         share.setText(can ? "Share with team (Meshtastic / TAK)" : "Share with team (connect Meshtastic or TAK first)");
@@ -192,8 +234,10 @@ class MapTools {
                 .setPositiveButton("Save", (d, w) -> {
                     String n = name.getText().toString().trim();
                     boolean closed = kind.getCheckedRadioButtonId() == area.getId();
-                    if (n.isEmpty()) n = closed ? "AREA" : "ROUTE";
+                    if (n.isEmpty()) n = closed ? "ZONE" : "ROUTE";
                     Store.Shape s = app.store.addMyShape(n, closed, pts, "");
+                    s.color = COLORS[Math.max(0, color.getSelectedItemPosition())];
+                    app.store.touchShapes();
                     if (share.isChecked() && !app.shareShape(s)) a.toast("Saved, but it could not be sent");
                     cancelDraw();
                     a.refreshMarkers();
@@ -207,6 +251,48 @@ class MapTools {
     // Shapes on the map
     // =====================================================================
 
+    static final String[] COLOR_NAMES = {"Amber", "Red", "Green", "Blue", "Purple", "White"};
+    static final int[] COLORS = {0xFFFFB000, 0xFFFF3B30, 0xFF39FF14, 0xFF40A0FF, 0xFFC77DFF, 0xFFF2F2F2};
+
+    private int colorOf(Store.Shape s) {
+        if (s.color != 0) return s.color;
+        return !s.src.isEmpty() ? Color.parseColor("#FFB0C4DE")
+                : s.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FFFF6EC7");
+    }
+
+    /** Name tag drawn in the middle of a zone. */
+    private android.graphics.drawable.Drawable zoneLabel(String name, int color) {
+        String label = name.toUpperCase(Locale.US);
+        android.graphics.Paint text = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        text.setTextSize(12 * dd);
+        text.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD));
+        text.setColor(color);
+        int w = (int) (text.measureText(label) + 12 * dd), h = (int) (20 * dd);
+        android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(Math.max(w, 1), h, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+        android.graphics.Paint plate = new android.graphics.Paint();
+        plate.setColor(Color.parseColor("#CC000000"));
+        c.drawRect(0, 0, w, h, plate);
+        android.graphics.Paint frame = new android.graphics.Paint();
+        frame.setStyle(android.graphics.Paint.Style.STROKE);
+        frame.setStrokeWidth(dd);
+        frame.setColor(color);
+        c.drawRect(0.5f * dd, 0.5f * dd, w - 0.5f * dd, h - 0.5f * dd, frame);
+        c.drawText(label, 6 * dd, 14.5f * dd, text);
+        return new android.graphics.drawable.BitmapDrawable(a.getResources(), bmp);
+    }
+
+    private void pickColor(final Store.Shape s) {
+        new AlertDialog.Builder(a)
+                .setTitle("// COLOR")
+                .setItems(COLOR_NAMES, (d, which) -> {
+                    s.color = COLORS[which];
+                    app.store.touchShapes();
+                    a.refreshMarkers();
+                })
+                .show();
+    }
+
     private final List<Overlay> shapeOverlays = new ArrayList<>();
     private int shapesRevDrawn = -1;
 
@@ -218,14 +304,13 @@ class MapTools {
         shapeOverlays.clear();
         for (final Store.Shape s : app.store.shapes.values()) {
             if (s.pts.size() < 2) continue;
-            int color = !s.src.isEmpty() ? Color.parseColor("#FFB0C4DE")
-                    : s.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FFFF6EC7");
+            int color = colorOf(s);
             List<GeoPoint> gp = new ArrayList<>();
             for (double[] p : s.pts) gp.add(new GeoPoint(p[0], p[1]));
             if (s.closed && s.pts.size() >= 3) {
                 Polygon pg = new Polygon(map);
                 pg.setPoints(gp);
-                pg.getFillPaint().setColor((color & 0x00FFFFFF) | 0x26000000);
+                pg.getFillPaint().setColor((color & 0x00FFFFFF) | 0x55000000); // about one-third opaque
                 pg.getOutlinePaint().setColor(color);
                 pg.getOutlinePaint().setStrokeWidth(2.5f * dd);
                 pg.setInfoWindow(null);
@@ -235,6 +320,21 @@ class MapTools {
                     return true;
                 });
                 shapeOverlays.add(pg);
+                // name tag in the middle (imports can be numerous, so only when they are named)
+                if (s.src.isEmpty() || !s.name.isEmpty()) {
+                    double[] c = Shapes.center(s.pts);
+                    org.osmdroid.views.overlay.Marker tag = new org.osmdroid.views.overlay.Marker(map);
+                    tag.setPosition(new GeoPoint(c[0], c[1]));
+                    tag.setIcon(zoneLabel(s.name, color));
+                    tag.setAnchor(0.5f, 0.5f);
+                    tag.setInfoWindow(null);
+                    tag.setOnMarkerClickListener((mk, mv) -> {
+                        if (drawing) return false;
+                        shapeTapped(s.id);
+                        return true;
+                    });
+                    shapeOverlays.add(tag);
+                }
             } else {
                 Polyline pl = new Polyline(map);
                 pl.setPoints(gp);
@@ -258,13 +358,14 @@ class MapTools {
         final Store.Shape s = app.store.shapes.get(id);
         if (s == null) return;
         String info = (s.closed
-                ? "AREA · " + Shapes.formatArea(Shapes.area(s.pts), app.imperial()) + " · perimeter " + Geo.formatDistance(Shapes.length(s.pts, true), app.imperial())
+                ? "ZONE · " + Shapes.formatArea(Shapes.area(s.pts), app.imperial()) + " · perimeter " + Geo.formatDistance(Shapes.length(s.pts, true), app.imperial())
                 : "ROUTE · " + Geo.formatDistance(Shapes.length(s.pts, false), app.imperial()) + " · " + s.pts.size() + " points")
                 + (s.isMine() ? "" : "\nFrom " + s.owner)
                 + (s.src.isEmpty() ? "" : "\nImported from " + s.src);
         final List<String> actions = new ArrayList<>();
         if (s.isMine()) actions.add(s.shared ? "Re-send to team" : "Share with team");
         if (s.isMine()) actions.add("Rename");
+        actions.add("Change color");
         actions.add("Delete");
         AlertDialog.Builder b = new AlertDialog.Builder(a)
                 .setTitle(s.name.toUpperCase(Locale.US))
@@ -277,6 +378,8 @@ class MapTools {
                             if (act.startsWith("Share") || act.startsWith("Re-send")) {
                                 if (!app.mesh.isConnected() && !app.tak.isConnected()) a.toast("Routes and areas go over Meshtastic or TAK. Connect one first.");
                                 else a.toast(app.shareShape(s) ? "Sent " + s.name : "Could not send (too long for one message?)");
+                            } else if (act.equals("Change color")) {
+                                pickColor(s);
                             } else if (act.equals("Rename")) {
                                 final EditText name = new EditText(a);
                                 name.setText(s.name);

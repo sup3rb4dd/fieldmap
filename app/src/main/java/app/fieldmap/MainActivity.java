@@ -1379,7 +1379,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void showMenu() {
         final String RADIOS = "Radios and TAK link", CHK = "Check in: send OK + my grid",
-                POS = "Send my position now", DRAW = "Draw a route or area",
+                POS = "Send my position now", DRAW = "Draw a route or zone",
                 LOS = "Line of sight: me → crosshair", DL = "Download this area for offline",
                 FILES = "Files: import, trail, backup", WX = "Weather alerts", CLR = "Clear heard stations",
                 LOG = "Packet log", DIAG = "Map diagnostics", SET = "Settings";
@@ -1390,7 +1390,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     if (a.equals(RADIOS)) radioTapped();
                     else if (a.equals(CHK)) { if (requireShare()) toast(app.checkIn() ? "Check-in sent" : "Send failed. See the packet log"); }
                     else if (a.equals(POS)) { if (requireShare()) toast(app.beaconNow() ? "Position sent" : "No GPS fix yet"); }
-                    else if (a.equals(DRAW)) tools.startDraw();
+                    else if (a.equals(DRAW)) tools.chooseDraw();
                     else if (a.equals(LOS)) {
                         IGeoPoint c = map.getMapCenter();
                         tools.terrainTo(c.getLatitude(), c.getLongitude(), "Crosshair");

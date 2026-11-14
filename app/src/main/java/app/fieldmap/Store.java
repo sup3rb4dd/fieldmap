@@ -40,6 +40,7 @@ public class Store {
         public String src = "";    // import file name, "" otherwise
         public boolean shared;
         public long time;
+        public int color;          // ARGB chosen by the user, 0 = default
 
         public boolean isMine() { return owner == null || owner.isEmpty(); }
     }
@@ -185,6 +186,7 @@ public class Store {
         o.put("id", s.id); o.put("name", s.name); o.put("closed", s.closed);
         o.put("poly", app.fieldmap.core.Shapes.encode(s.pts));
         o.put("owner", s.owner); o.put("src", s.src); o.put("shared", s.shared); o.put("time", s.time);
+        o.put("color", s.color);
         return o;
     }
 
@@ -195,6 +197,7 @@ public class Store {
         if (pts == null || pts.size() < 2) throw new org.json.JSONException("bad shape");
         s.pts = pts;
         s.owner = o.optString("owner"); s.src = o.optString("src"); s.shared = o.optBoolean("shared"); s.time = o.optLong("time");
+        s.color = o.optInt("color");
         return s;
     }
 
