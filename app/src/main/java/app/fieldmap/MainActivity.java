@@ -68,6 +68,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import app.fieldmap.core.Geo;
+import app.fieldmap.core.Mesh;
 import app.fieldmap.core.Mgrs;
 
 @SuppressLint("MissingPermission")
@@ -723,7 +724,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             new AlertDialog.Builder(this)
                     .setTitle("Meshtastic")
                     .setMessage("State: " + app.mesh.getState() + "\nDevice: " + app.mesh.deviceName()
-                            + "\nMy node: " + (app.myNodeNum == 0 ? "?" : app.fieldmap.core.Mesh.nodeId(app.myNodeNum))
+                            + "\nMy node: " + (app.myNodeNum == 0 ? "?" : Mesh.nodeId(app.myNodeNum))
                             + "\nPackets received: " + app.mesh.rxCount + "\nPackets sent: " + app.mesh.txCount)
                     .setPositiveButton("Disconnect", (d, w) -> app.mesh.disconnect())
                     .setNegativeButton("Close", null).show();
