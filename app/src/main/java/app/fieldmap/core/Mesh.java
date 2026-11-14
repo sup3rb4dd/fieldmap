@@ -55,7 +55,7 @@ public final class Mesh {
 
     // ---------- incoming ----------
 
-    public enum Kind { MY_INFO, NODE_INFO, CONFIG_COMPLETE, TEXT, POSITION, USER, WAYPOINT, REBOOTED, OTHER }
+    public enum Kind { MY_INFO, NODE_INFO, CONFIG_COMPLETE, TEXT, POSITION, USER, WAYPOINT, REBOOTED, OTHER, ROUTING }
 
     public static final class Node {
         public int num;
@@ -87,6 +87,8 @@ public final class Mesh {
         public String text;
         public double lat = Double.NaN, lon = Double.NaN;
         public Waypoint waypoint;
+        /** ROUTING: the packet id this answers, and 0 if it got through. */
+        public int requestId, routingError;
     }
 
     public static String nodeId(int num) {
@@ -198,6 +200,7 @@ public final class Mesh {
         while (d.next()) {
             if (d.field == 1) e.port = d.i32();
             else if (d.field == 2) payload = d.bytes();
+            else if (d.field == 6) e.requestId = d.i32();
         }
         switch (e.port) {
             case PORT_TEXT:
@@ -215,6 +218,13 @@ public final class Mesh {
                 parseUser(n, payload);
                 e.kind = Kind.USER;
                 e.node = n;
+                break;
+            }
+            case PORT_ROUTING: {
+                // an acknowledgement: error_reason (field 3) is absent or 0 when the packet got through
+                e.kind = Kind.ROUTING;
+                Proto.Reader rr = new Proto.Reader(payload);
+                while (rr.next()) if (rr.field == 3) e.routingError = rr.i32();
                 break;
             }
             case PORT_WAYPOINT:

@@ -41,10 +41,28 @@
         <EditText android:id="@+id/setFilter" style="@style/SettingsField"
             android:hint="e.g. KF0ABC, KF0XYZ" android:inputType="textCapCharacters|textNoSuggestions" />
 
+        <TextView style="@style/SettingsHeader" android:layout_marginTop="28dp" android:text="◆ GMRS MODE" />
+        <CheckBox android:id="@+id/setGmrs" style="@style/HudCheck"
+            android:text="GMRS mode: the UV-PRO link sends texts and map data on GMRS instead of ham APRS" />
+        <TextView style="@style/SettingsLabel" android:text="// GMRS callsign (on your FCC licence)" />
+        <EditText android:id="@+id/setGmrsCall" style="@style/SettingsField"
+            android:hint="e.g. WRXX123" android:inputType="textCapCharacters|textNoSuggestions" android:maxLength="7" />
+        <TextView style="@style/SettingsLabel" android:text="// Unit name for this radio (max 6, e.g. ELI)" />
+        <EditText android:id="@+id/setGmrsUnit" style="@style/SettingsField"
+            android:inputType="textCapCharacters|textNoSuggestions" android:maxLength="6" />
+        <CheckBox android:id="@+id/setGmrsPos" style="@style/HudCheck"
+            android:text="Send my position automatically on GMRS (uses the report interval above)" />
+        <TextView
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp"
+            android:textColor="@color/dim" android:textSize="11sp"
+            android:text="While this is on, an amber GMRS MODE bar stays on the map and chat. The app keeps to the FCC data rules for GMRS: bursts of one second or less (60-character texts), one burst every 30 seconds, no relays. Messages wait in line for their turn. Everyone in the group needs GMRS mode on, the same team name, and the same channel (1-22; not a repeater channel). GMRS is not encrypted. The app cannot set the radio's channel: tune that on the radio. One GMRS licence covers your immediate family; each radio gets its own unit name." />
+
         <TextView style="@style/SettingsHeader" android:layout_marginTop="28dp" android:text="◆ PRIVACY" />
 
         <TextView style="@style/SettingsLabel" android:text="// Meshtastic team channel" />
         <Spinner android:id="@+id/setMeshCh" android:layout_width="match_parent" android:layout_height="48dp" android:background="@drawable/hud_field" />
+        <CheckBox android:id="@+id/setMeshCh0Ok" style="@style/HudCheck"
+            android:text="Channel 0 is private on our radios (we changed its key)" />
         <CheckBox android:id="@+id/setTeamOnly" style="@style/HudCheck"
             android:text="Only show mesh nodes &amp; waypoints from the team channel" />
         <CheckBox android:id="@+id/setAprsTeam" style="@style/HudCheck"
@@ -52,11 +70,11 @@
         <CheckBox android:id="@+id/setAprsPos" style="@style/HudCheck"
             android:text="Send my position over APRS (PUBLIC)" />
         <CheckBox android:id="@+id/setNogate" style="@style/HudCheck"
-            android:text="Keep my APRS packets off the internet (NOGATE)" />
+            android:text="Keep my APRS packets off the internet (NOGATE). SOS is never held back." />
         <TextView
             android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp"
             android:textColor="@color/dim" android:textSize="11sp"
-            android:text="Mesh traffic is encrypted with the team channel's key: only radios with that key can read it. APRS can't be encrypted (FCC rules) — anyone with a scanner can read it." />
+            android:text="Mesh traffic is encrypted with the team channel's key: only radios with that key can read it. On a radio with factory settings, channel 0 is the public channel that every Meshtastic user nearby shares, so team traffic is held on channel 0 until you tick the box above or pick your private channel. APRS can't be encrypted (FCC rules) — anyone with a scanner can read it." />
 
         <TextView style="@style/SettingsHeader" android:layout_marginTop="28dp" android:text="◆ TAK LINK (ATAK / WINTAK / ITAK)" />
         <CheckBox android:id="@+id/setTakLan" style="@style/HudCheck"
@@ -101,6 +119,12 @@
         <CheckBox android:id="@+id/setImperial" style="@style/HudCheck"
             android:text="Imperial units (mi / ft)" />
         <CheckBox android:id="@+id/setKeepOn" style="@style/HudCheck" android:text="Keep screen on" />
+        <CheckBox android:id="@+id/setPlain" style="@style/HudCheck"
+            android:text="Plain button labels (ME, +PIN, MAP, CHAT, TEAM) instead of POS, +WPT, LYR, MSG, TRK" />
+        <CheckBox android:id="@+id/setLocalTime" style="@style/HudCheck"
+            android:text="Show local time instead of Zulu (UTC)" />
+        <CheckBox android:id="@+id/setUpdateCheck" style="@style/HudCheck"
+            android:text="Tell me when a newer build is out (asks GitHub once a day)" />
 
         <Button android:id="@+id/setSave" style="@style/HudBigButton" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="24dp" android:text="[ COMMIT CONFIG ]" />

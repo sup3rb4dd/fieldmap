@@ -135,7 +135,8 @@ public final class Alerts {
         long now = System.currentTimeMillis();
         long limit = minutes * 60_000L;
         for (Store.Station s : app.store.stations.values()) {
-            if (s.time < sessionStart) continue;      // only teammates heard since the app started
+            if (s.time < sessionStart) continue;      // only those heard since the app started
+            if (!app.isTeammate(s)) continue;         // not strangers heard on public APRS
             boolean late = now - s.time > limit;
             if (late && overdueAlerted.add(s.call)) {
                 post(ctx, "OVERDUE · " + s.label().toUpperCase(Locale.US),

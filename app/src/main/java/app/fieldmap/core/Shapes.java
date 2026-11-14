@@ -180,12 +180,19 @@ public final class Shapes {
      * one mesh message; returns null if even two points will not fit.
      */
     public static String share(String name, boolean closed, List<double[]> pts) {
-        String head = (closed ? "%AREA " : "%RTE ") + cleanName(name) + "%";
+        return share(name, closed, pts, MAX_SHARE_CHARS);
+    }
+
+    /** Same, for links with a smaller limit (APRS, GMRS). Long names are cut to leave room for the line. */
+    public static String share(String name, boolean closed, List<double[]> pts, int maxChars) {
+        String nm = cleanName(name);
+        if (maxChars < 100 && nm.length() > 8) nm = nm.substring(0, 8).trim();
+        String head = (closed ? "%AREA " : "%RTE ") + nm + "%";
         List<double[]> cur = pts;
         double tol = 2;
         while (true) {
             String s = head + encode(cur);
-            if (s.length() <= MAX_SHARE_CHARS) return s;
+            if (s.length() <= maxChars) return s;
             if (cur.size() <= (closed ? 3 : 2) || tol > 1e6) return null;
             cur = simplify(pts, tol);
             tol *= 1.6;

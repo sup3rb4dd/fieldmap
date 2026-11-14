@@ -98,7 +98,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private String wxDrawn = "";
     private Compass compass;
     private ArrowView navArrow;
-    private TextView tvSos, tvWx, tvHdg;
+    private TextView tvSos, tvWx, tvHdg, tvGmrs, tvUpdate;
+    private boolean meshAsked = false;
     private Button btnSos, btnNorth;
     private float heading = Float.NaN;
     private boolean headingUp = false;
@@ -153,11 +154,15 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         btnNorth.setOnClickListener(v -> {
             setHeadingUp(false);
             map.setMapOrientation(0);
-            toastOnce("hdgUp", "Hold N↑ to make the map turn with you");
+            toastOnce("hdgUp", "Hold this button to make the map turn with you");
         });
         btnNorth.setOnLongClickListener(v -> { setHeadingUp(!headingUp); return true; });
         btnSos.setOnClickListener(v -> sosTapped());
         tvSos.setOnClickListener(v -> sosBannerTapped());
+        tvGmrs = findViewById(R.id.tvGmrs);
+        tvGmrs.setOnClickListener(v -> gmrsTapped());
+        tvUpdate = findViewById(R.id.tvUpdate);
+        tvUpdate.setOnClickListener(v -> updateTapped());
         tvWx.setOnClickListener(v -> showWeather(app.weather.top()));
         tvTarget.setOnClickListener(v -> {
             double[] t = targetPosition();
@@ -437,7 +442,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
         boolean was = headingUp;
         headingUp = on;
-        btnNorth.setText(on ? "HDG↑" : "N↑");
+        btnNorth.setText(on ? app.lbl("HDG↑", "TURN") : app.lbl("N↑", "NORTH"));
         if (was && !on) map.setMapOrientation(0);
     }
 
@@ -664,7 +669,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             new AlertDialog.Builder(this)
                     .setTitle("// NO RADIO CONNECTED")
                     .setMessage("SOS goes out over your radios, and none is connected"
-                            + (app.radio.isConnected() ? " that can transmit (APRS needs your callsign in Settings)" : "")
+                            + (app.radio.isConnected() ? " that can transmit (the UV-PRO needs a callsign in Settings)" : "")
                             + ".\n\nIf you have phone service, call 911.")
                     .setPositiveButton("Connect a radio", (d, w) -> radioTapped())
                     .setNegativeButton("Close", null)
@@ -732,6 +737,29 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             tvSos.setVisibility(android.view.View.VISIBLE);
         }
         btnSos.setText(app.sosActive ? "SOS●" : "SOS");
+
+        // GMRS mode: an amber bar that is always there while the mode is on
+        if (!app.gmrs()) {
+            tvGmrs.setVisibility(android.view.View.GONE);
+        } else {
+            String line2;
+            if (!app.gmrsReady()) line2 = "SETUP NOT FINISHED · TAP";
+            else if (!app.radio.isConnected()) line2 = "RADIO NOT CONNECTED · NOTHING IS BEING SENT";
+            else {
+                int w = app.gmrsWaitSeconds(), n = app.gmrsQueue.size();
+                line2 = (n > 0 ? n + " WAITING · NEXT BURST IN " + w + " S" : w > 0 ? "CAN SEND AGAIN IN " + w + " S" : "READY TO SEND")
+                        + " · NOT ENCRYPTED";
+            }
+            tvGmrs.setText("▲ GMRS MODE ON" + (app.gmrsReady() ? " · " + app.gmrsCall() + " / " + app.gmrsUnit() : "") + "\n" + line2);
+            tvGmrs.setBackground(frame(0xFFFFB000, 0xFFFFB000, dd));
+            tvGmrs.setVisibility(android.view.View.VISIBLE);
+        }
+        int ub = app.updateBuild();
+        if (ub == 0) tvUpdate.setVisibility(android.view.View.GONE);
+        else {
+            tvUpdate.setText("⬇ NEWER BUILD AVAILABLE (" + ub + ") · TAP");
+            tvUpdate.setVisibility(android.view.View.VISIBLE);
+        }
 
         Weather.Alert a = app.prefs.getBoolean("weather", true) ? app.weather.top() : null;
         if (a == null) {
@@ -834,8 +862,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private final android.os.Handler clockHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable clockTick = new Runnable() {
         @Override public void run() {
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("ddHHmm'Z' MMMyy", Locale.US);
-            f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            boolean local = app.prefs.getBoolean("localTime", false);
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(local ? "HH:mm  dd MMM" : "ddHHmm'Z' MMMyy", Locale.US);
+            if (!local) f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
             tvClock.setText(f.format(new java.util.Date()).toUpperCase(Locale.US));
             updateTileStatus();
             updateBanners();
@@ -844,6 +873,124 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     };
 
     private void chooseLayer() { tools.chooseLayer(); }
+
+    private void gmrsTapped() {
+        new AlertDialog.Builder(this)
+                .setTitle("// GMRS MODE IS ON")
+                .setMessage("The UV-PRO link is sending as GMRS station " + (app.gmrsReady() ? app.gmrsCall() + " (unit " + app.gmrsUnit() + ")" : "(setup not finished)")
+                        + ", on whatever channel the radio is tuned to.\n\n"
+                        + "• Team chat, pins, small routes and zones, and your position (when you send it) go out on GMRS.\n"
+                        + "• One burst every 30 seconds, 60 characters per text. Extra messages wait in line; SOS jumps the line.\n"
+                        + "• Not encrypted. Say your callsign by voice when you finish.\n"
+                        + "• Use channels 1-22, not a repeater channel.\n\n"
+                        + "Turn it off in Settings ▸ GMRS mode.")
+                .setPositiveButton("Settings", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void updateTapped() {
+        new AlertDialog.Builder(this)
+                .setTitle("// NEWER BUILD: " + app.updateBuild())
+                .setMessage("You have build " + app.versionCode() + ". Download the new one and open it to install over this one. Your pins and settings stay.\n\n"
+                        + "If Android says the app can't be installed, the signing key changed: use ≡ ▸ Files ▸ Backup first, uninstall FieldMap, install the new one, then restore.")
+                .setPositiveButton("Download", (d, w) -> {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(FieldMapApp.DOWNLOAD_URL))); }
+                    catch (Exception e) { toast("No browser found"); }
+                })
+                .setNegativeButton("Later", null)
+                .show();
+    }
+
+    /** Button names: military-style or plain, as chosen in Settings. */
+    private void applyLabels() {
+        ((Button) findViewById(R.id.btnMe)).setText(app.lbl("POS", "ME"));
+        ((Button) findViewById(R.id.btnPin)).setText(app.lbl("+WPT", "+PIN"));
+        ((Button) findViewById(R.id.btnGrid)).setText(app.lbl("GRID", "GO TO"));
+        ((Button) findViewById(R.id.btnLayer)).setText(app.lbl("LYR", "MAP"));
+        ((Button) findViewById(R.id.btnList)).setText(app.lbl("TRK", "TEAM"));
+        ((Button) findViewById(R.id.btnMenu)).setText(app.lbl("≡", "MENU"));
+        ((Button) findViewById(R.id.btnMenu)).setTextSize(app.prefs.getBoolean("plain", false) ? 12 : 16);
+        btnNorth.setText(headingUp ? app.lbl("HDG↑", "TURN") : app.lbl("N↑", "NORTH"));
+    }
+
+    /** Phones (Samsung especially) stop background apps to save battery unless told not to. */
+    private void askBattery(boolean force) {
+        if (Build.VERSION.SDK_INT < 23) return;
+        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+        if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) {
+            if (force) toast("Already allowed: Android will not put FieldMap to sleep");
+            return;
+        }
+        if (!force && app.prefs.getBoolean("askedBattery", false)) return;
+        app.prefs.edit().putBoolean("askedBattery", true).apply();
+        new AlertDialog.Builder(this)
+                .setTitle("// KEEP RUNNING WITH THE SCREEN OFF?")
+                .setMessage("To save battery, Android may put FieldMap to sleep in your pocket, and alerts and position reports would stop without warning. "
+                        + "Allow it to keep running? It only stays awake while a radio is connected.\n\n"
+                        + "Samsung phones: also check Settings ▸ Battery ▸ Background usage limits, and keep FieldMap out of the sleeping apps list.")
+                .setPositiveButton("Allow", (d, w) -> {
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                android.net.Uri.parse("package:" + getPackageName())));
+                    } catch (Exception e) {
+                        try { startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
+                        catch (Exception e2) { toast("Open Android Settings ▸ Battery and set FieldMap to Unrestricted"); }
+                    }
+                })
+                .setNegativeButton("Not now", null)
+                .show();
+    }
+
+    /** Meshtastic just connected and the team channel is 0, which is public on a factory-default radio. */
+    private void askMeshChannel() {
+        if (meshAsked || !app.mesh.isConnected() || app.meshTeamOk() || isFinishing()) return;
+        meshAsked = true;
+        new AlertDialog.Builder(this)
+                .setTitle("// IS YOUR MESH CHANNEL PRIVATE?")
+                .setMessage("Your team channel is set to 0. On a Meshtastic radio with factory settings, channel 0 is the public channel that every Meshtastic user nearby shares, "
+                        + "so your chat, pins and position would go to strangers.\n\n"
+                        + "Team traffic is on hold until you choose. Receiving still works, and SOS always goes out.\n\n"
+                        + "• If your group changed channel 0 to its own name and key in the Meshtastic app, it is private: choose that.\n"
+                        + "• If your private channel is a different number, pick it in Settings ▸ Privacy.\n"
+                        + "• Not sure? Keep it on hold.")
+                .setPositiveButton("Channel 0 is private", (d, w) -> {
+                    app.prefs.edit().putBoolean("meshCh0Ok", true).apply();
+                    updateRadioStatus();
+                })
+                .setNeutralButton("Settings", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
+                .setNegativeButton("Keep on hold", null)
+                .show();
+    }
+
+    private void showHelp() {
+        new AlertDialog.Builder(this)
+                .setTitle("// HELP")
+                .setMessage("THE MAP\n"
+                        + "• Drag to move, pinch to zoom. The crosshair marks the middle; its grid is on the bottom line.\n"
+                        + "• Long-press the map, or tap " + app.lbl("+WPT", "+PIN") + ", to drop a pin. Tap a pin or a teammate for distance, direction, and options.\n"
+                        + "• " + app.lbl("POS", "ME") + " jumps to you. " + app.lbl("GRID", "GO TO") + " jumps to a grid you type. " + app.lbl("LYR", "MAP") + " changes the map type.\n"
+                        + "• DRAW makes a route or a shaded zone. While drawing, hold a corner and then tap where it should go to move it.\n"
+                        + "• ≡ ▸ Download this area saves the map for use without internet.\n\n"
+                        + "RADIOS\n"
+                        + "• Tap the status line at the top to connect. ▲ means connected.\n"
+                        + "• Meshtastic (Heltec): private if your team uses its own channel. Close the Meshtastic app first.\n"
+                        + "• UV-PRO as APRS: ham bands, public, needs a ham callsign.\n"
+                        + "• UV-PRO as GMRS: turn on GMRS mode in Settings. Short texts and map data, one burst every 30 seconds, not encrypted. An amber bar shows while it is on.\n\n"
+                        + "MESSAGES\n"
+                        + "• " + app.lbl("MSG", "CHAT") + " opens team chat. Messages go out on every connected link.\n"
+                        + "• ✓ means the other end (or the mesh) confirmed it. … means sent but not confirmed.\n"
+                        + "• Tap a message with a grid in it to jump there.\n\n"
+                        + "SOS\n"
+                        + "• The red button sends your name and grid to your team every 2 minutes until you cancel. It reaches radios only. It does not call 911.\n\n"
+                        + "IF SOMETHING IS OFF\n"
+                        + "• ≡ ▸ Packet log shows everything sent and received. Use SEND TO… to share it.\n"
+                        + "• Alerts stop with the screen off? ≡ ▸ Keep running in background.\n"
+                        + "• Prefer plain words and local time? Settings ▸ Display.\n\n"
+                        + "Build " + app.versionCode())
+                .setPositiveButton("Close", null)
+                .show();
+    }
 
     private void centerOnMe() {
         Location l = app.lastLoc;
@@ -1384,14 +1531,16 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 POS = "Send my position now", DRAW = "Draw a route or zone",
                 LOS = "Line of sight: me → crosshair", DL = "Download this area for offline",
                 FILES = "Files: import, trail, backup", WX = "Weather alerts", CLR = "Clear heard stations",
-                LOG = "Packet log", DIAG = "Map diagnostics", SET = "Settings";
-        final String[] items = {RADIOS, CHK, POS, DRAW, LOS, DL, FILES, WX, CLR, LOG, DIAG, SET};
+                LOG = "Packet log", DIAG = "Map diagnostics", SET = "Settings",
+                BAT = "Keep running in background (battery)", HELP = "Help";
+        final String[] items = {RADIOS, CHK, POS, DRAW, LOS, DL, FILES, WX, CLR, LOG, DIAG, BAT, SET, HELP};
         new AlertDialog.Builder(this)
                 .setItems(items, (d, which) -> {
                     String a = items[which];
                     if (a.equals(RADIOS)) radioTapped();
                     else if (a.equals(CHK)) { if (requireShare()) toast(app.checkIn() ? "Check-in sent" : "Send failed. See the packet log"); }
-                    else if (a.equals(POS)) { if (requireShare()) toast(app.beaconNow() ? "Position sent" : "No GPS fix yet"); }
+                    else if (a.equals(POS)) { if (requireShare()) toast(app.beaconNow() ? (app.gmrs() && app.radio.isConnected() ? "Position queued for the next GMRS burst" : "Position sent")
+                            : "Not sent: no GPS fix in the last 3 minutes"); }
                     else if (a.equals(DRAW)) tools.chooseDraw();
                     else if (a.equals(LOS)) {
                         IGeoPoint c = map.getMapCenter();
@@ -1404,6 +1553,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     else if (a.equals(LOG)) startActivity(new Intent(this, LogActivity.class));
                     else if (a.equals(DIAG)) runMapDiagnostics();
                     else if (a.equals(SET)) startActivity(new Intent(this, SettingsActivity.class));
+                    else if (a.equals(BAT)) askBattery(true);
+                    else if (a.equals(HELP)) showHelp();
                 })
                 .show();
     }
@@ -1426,7 +1577,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     }
 
     private boolean requireShare() {
-        if (app.mesh.isConnected() || app.tak.isConnected()) return true;
+        if (app.meshTx() || app.tak.isConnected()) return true;
+        if (app.canShare()) return true;
+        if (app.mesh.isConnected() && !app.meshTeamOk()) {
+            meshAsked = false;
+            askMeshChannel();
+            return false;
+        }
         if (app.canTransmit() && !app.aprsTeam()) {
             new AlertDialog.Builder(this)
                     .setTitle("// APRS IS PUBLIC")
@@ -1444,7 +1601,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         if (!app.hasCallsign()) {
             new AlertDialog.Builder(this)
                     .setTitle("// CALLSIGN REQUIRED")
-                    .setMessage("Sending over the radio needs your amateur callsign. Add it in Settings.")
+                    .setMessage(app.gmrs() ? "GMRS mode needs your GMRS callsign and a unit name. Add them in Settings ▸ GMRS mode."
+                            : "Sending over the radio needs your amateur callsign. Add it in Settings. (With a GMRS licence instead, turn on GMRS mode there.)")
                     .setPositiveButton("Settings", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
                     .setNegativeButton("Cancel", null).show();
             return false;
@@ -1459,10 +1617,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     // ---------- radio ----------
 
     private void radioTapped() {
-        String aprs = "UV-PRO (APRS): " + stateWord(app.radio.getState())
+        String aprs = (app.gmrs() ? "UV-PRO (GMRS MODE ON): " : "UV-PRO (APRS): ") + stateWord(app.radio.getState())
                 + (app.radio.isConnected() ? " · " + app.radio.deviceName() : "");
         String mesh = "Meshtastic: " + stateWord(app.mesh.getState())
-                + (app.mesh.isConnected() ? " · " + app.mesh.deviceName() : "");
+                + (app.mesh.isConnected() ? " · " + app.mesh.deviceName() + (app.meshTeamOk() ? "" : " · TEAM TRAFFIC ON HOLD") : "");
         String tak = "TAK link (ATAK users): " + (app.tak.getState() == RadioLink.State.OFF ? "off — set up in Settings"
                 : app.tak.describe().trim() + " · RX " + app.tak.rxCount);
         new AlertDialog.Builder(this)
@@ -1652,7 +1810,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private String radioSummary() {
         return "State: " + app.radio.getState() + "\nDevice: " + app.radio.deviceName()
                 + "\nPackets received: " + app.radio.rxCount + "\nPackets sent: " + app.radio.txCount
-                + "\nMy callsign: " + (app.hasCallsign() ? app.myCall() : "(not set — listen only)")
+                + (app.gmrs() ? "\nMode: GMRS · " + (app.gmrsReady() ? app.gmrsCall() + " / " + app.gmrsUnit() : "setup not finished — listen only")
+                        + "\nWaiting to send: " + app.gmrsQueue.size()
+                : "\nMy callsign: " + (app.hasCallsign() ? app.myCall() : "(not set — listen only)"))
                 + "\nBeacon: " + (app.beaconSeconds() == 0 ? "off" : "every " + app.beaconSeconds() / 60 + " min");
     }
 
@@ -1664,11 +1824,16 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         RadioLink.State s = app.radio.getState(), ms = app.mesh.getState(), ts = app.tak.getState();
         StringBuilder sb = new StringBuilder("■");
         boolean anyOn = false, anyWanted = false;
-        if (s != RadioLink.State.OFF) { sb.append(" APRS").append(linkMark(s)); anyWanted = true; anyOn |= s == RadioLink.State.CONNECTED; }
-        if (ms != RadioLink.State.OFF) { sb.append(" MESH").append(linkMark(ms)); anyWanted = true; anyOn |= ms == RadioLink.State.CONNECTED; }
+        if (s != RadioLink.State.OFF) { sb.append(' ').append(app.radioLabel()).append(linkMark(s)); anyWanted = true; anyOn |= s == RadioLink.State.CONNECTED; }
+        if (ms != RadioLink.State.OFF) {
+            sb.append(" MESH").append(linkMark(ms));
+            if (ms == RadioLink.State.CONNECTED && !app.meshTeamOk()) sb.append("(HELD)");
+            anyWanted = true; anyOn |= ms == RadioLink.State.CONNECTED;
+        }
+        if (ms == RadioLink.State.CONNECTED) askMeshChannel();
         if (ts != RadioLink.State.OFF) { sb.append(" TAK").append(linkMark(ts)); anyWanted = true; anyOn |= ts == RadioLink.State.CONNECTED; }
         if (!anyWanted) {
-            radioStatus.setText("■ COMMS: OFFLINE");
+            radioStatus.setText(app.lbl("■ COMMS: OFFLINE", "■ RADIOS: OFF · TAP TO CONNECT"));
             radioStatus.setTextColor(ContextCompat.getColor(this, R.color.dim));
         } else {
             sb.append("  RX").append(app.radio.rxCount + app.mesh.rxCount + app.tak.rxCount);
@@ -1678,7 +1843,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             radioStatus.setTextColor(ContextCompat.getColor(this, anyOn ? R.color.accent : R.color.warn));
         }
         int unread = app.store.unread;
-        btnChat.setText(unread > 0 ? "MSG·" + unread : "MSG");
+        String chat = app.lbl("MSG", "CHAT");
+        btnChat.setText(unread > 0 ? chat + "·" + unread : chat);
+        if (anyOn && app.background()) askBattery(false);
     }
 
     // ---------- location ----------
@@ -1785,6 +1952,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         applyDetail();
         clockHandler.removeCallbacks(clockTick);
         clockHandler.post(clockTick);
+        applyLabels();
+        app.checkUpdate();
         app.addListener(this);
         if (app.prefs.getBoolean("keepOn", false)) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);

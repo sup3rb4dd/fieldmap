@@ -14,12 +14,22 @@ android {
         versionName "0.3." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
 
+    // The real signing key lives in the repository's private GitHub secrets and is handed to the
+    // build through these variables. Until those secrets exist, the old key in this folder is used.
+    def privateKey = System.getenv("FM_KEYSTORE")
     signingConfigs {
         fieldmap {
-            storeFile file('fieldmap.jks')
-            storePassword 'fieldmap'
-            keyAlias 'fieldmap'
-            keyPassword 'fieldmap'
+            if (privateKey) {
+                storeFile file(privateKey)
+                storePassword System.getenv("FM_STORE_PASS")
+                keyAlias 'fieldmap'
+                keyPassword System.getenv("FM_STORE_PASS")
+            } else {
+                storeFile file('fieldmap.jks')
+                storePassword 'fieldmap'
+                keyAlias 'fieldmap'
+                keyPassword 'fieldmap'
+            }
         }
     }
 

@@ -79,9 +79,11 @@ public class FieldMapService extends Service {
             lm = (LocationManager) getSystemService(LOCATION_SERVICE);
             try {
                 if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER))
-                    lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 0, loc);
+                    // screen off: a fix every 10 s is plenty for a trail, every 30 s for position reports alone
+                    lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,
+                            FieldMapApp.get().prefs.getBoolean("trails", true) ? 10000 : 30000, 0, loc);
                 if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
-                    lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 15000, 0, loc);
+                    lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 30000, 0, loc);
             } catch (Exception ignored) {
             }
         }
@@ -94,14 +96,15 @@ public class FieldMapService extends Service {
 
     static Notification buildNotification(Context ctx) {
         FieldMapApp app = FieldMapApp.get();
-        String aprs = app.radio.isConnected() ? "APRS▲" : app.radio.getState() == RadioLink.State.OFF ? "APRS·" : "APRS…";
+        String rl = app.radioLabel();
+        String aprs = app.radio.isConnected() ? rl + "▲" : app.radio.getState() == RadioLink.State.OFF ? rl + "·" : rl + "…";
         String mesh = app.mesh.isConnected() ? "MESH▲" : app.mesh.getState() == RadioLink.State.OFF ? "MESH·" : "MESH…";
         PendingIntent open = PendingIntent.getActivity(ctx, 0, new Intent(ctx, MainActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new NotificationCompat.Builder(ctx, Alerts.CH_STATUS)
                 .setSmallIcon(R.drawable.ic_stat)
-                .setContentTitle("FieldMap active")
+                .setContentTitle(app.sosActive ? "FieldMap · YOUR SOS IS TRANSMITTING" : app.gmrs() ? "FieldMap active · GMRS MODE" : "FieldMap active")
                 .setContentText(aprs + "  " + mesh + (app.tak.getState() == RadioLink.State.OFF ? "" : app.tak.isConnected() ? "  TAK▲" : "  TAK…")
                         + "  · RX " + (app.radio.rxCount + app.mesh.rxCount + app.tak.rxCount))
                 .setOngoing(true)

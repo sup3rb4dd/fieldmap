@@ -18,6 +18,23 @@ public class LogActivity extends AppCompatActivity implements FieldMapApp.Listen
         setContentView(R.layout.activity_log);
         text = findViewById(R.id.logText);
         scroll = findViewById(R.id.logScroll);
+        findViewById(R.id.logCopy).setOnClickListener(v -> {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("FieldMap log", FieldMapApp.get().logText()));
+            android.widget.Toast.makeText(this, "Log copied", android.widget.Toast.LENGTH_SHORT).show();
+        });
+        findViewById(R.id.logShare).setOnClickListener(v -> {
+            String t = FieldMapApp.get().logText();
+            // very long texts can fail to hand over between apps: the newest part is what matters
+            if (t.length() > 60000) t = t.substring(t.length() - 60000);
+            try {
+                startActivity(android.content.Intent.createChooser(new android.content.Intent(android.content.Intent.ACTION_SEND)
+                        .setType("text/plain").putExtra(android.content.Intent.EXTRA_SUBJECT, "FieldMap packet log")
+                        .putExtra(android.content.Intent.EXTRA_TEXT, t), "Send the log"));
+            } catch (Exception e) {
+                android.widget.Toast.makeText(this, "No app to send with", android.widget.Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     private void refresh() {

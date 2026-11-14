@@ -105,7 +105,23 @@ class MapTools {
         }
 
         @Override
-        public boolean onLongPress(android.view.MotionEvent e, MapView mv) { return drawing; }
+        public boolean onLongPress(android.view.MotionEvent e, MapView mv) {
+            if (!drawing) return false;
+            // holding a corner picks it up; the next tap puts it down
+            org.osmdroid.api.IGeoPoint g = mv.getProjection().fromPixels((int) e.getX(), (int) e.getY());
+            double reach = 30 * dd * metersPerPixel(g.getLatitude()), best = Double.MAX_VALUE;
+            int pick = -1;
+            for (int i = 0; i < draft.size(); i++) {
+                double dist = Geo.distance(draft.get(i)[0], draft.get(i)[1], g.getLatitude(), g.getLongitude());
+                if (dist < reach && dist < best) { best = dist; pick = i; }
+            }
+            if (pick >= 0) {
+                moving = pick;
+                tvDraw.setText("CORNER PICKED UP · TAP ITS NEW SPOT");
+                mv.invalidate();
+            }
+            return true;
+        }
 
         @Override
         public void draw(android.graphics.Canvas c, org.osmdroid.views.Projection proj) {
@@ -115,7 +131,8 @@ class MapTools {
                 // in zone mode the first corner is bigger: tap it to close the zone
                 boolean closer = zoneMode && i == 0 && draft.size() >= 3;
                 float r = (closer ? 9 : 5) * dd;
-                dot.setColor(closer ? Color.parseColor("#FF39FF14") : Color.WHITE);
+                dot.setColor(i == moving ? Color.parseColor("#FFFFB000") : closer ? Color.parseColor("#FF39FF14") : Color.WHITE);
+                if (i == moving) r = 10 * dd;
                 c.drawCircle(px.x, px.y, r, dot);
                 c.drawCircle(px.x, px.y, r, ring);
             }
@@ -128,7 +145,17 @@ class MapTools {
                 / (org.osmdroid.util.TileSystem.getTileSize() * Math.pow(2, map.getZoomLevelDouble()));
     }
 
+    /** Corner being moved (held, waiting for a tap at its new spot), or -1. */
+    private int moving = -1;
+
     private void tapped(double lat, double lon) {
+        if (moving >= 0 && moving < draft.size()) {
+            draft.set(moving, new double[]{lat, lon});
+            moving = -1;
+            updateDraw();
+            return;
+        }
+        moving = -1;
         if (zoneMode && draft.size() >= 3) {
             double[] first = draft.get(0);
             // a tap on (or close to) the first corner closes the zone
@@ -195,6 +222,7 @@ class MapTools {
     }
 
     private void undo() {
+        moving = -1;
         if (!draft.isEmpty()) draft.remove(draft.size() - 1);
         updateDraw();
     }
@@ -212,6 +240,7 @@ class MapTools {
     private void updateDraw() {
         drawRow.setVisibility(drawing ? View.VISIBLE : View.GONE);
         btnDraw.setText(drawing ? "DRAW●" : "DRAW");
+        if (!drawing) moving = -1;
         if (draftLine != null) {
             List<GeoPoint> gp = new ArrayList<>();
             for (double[] p : draft) gp.add(new GeoPoint(p[0], p[1]));
@@ -463,8 +492,9 @@ class MapTools {
                     if (act.equals(EDIT)) editShape(s);
                     else if (act.equals(REDRAW)) redraw(s);
                     else if (act.equals(SHARE)) {
-                        if (!app.mesh.isConnected() && !app.tak.isConnected()) a.toast("Routes and zones go over Meshtastic or TAK. Connect one first.");
-                        else a.toast(app.shareShape(s) ? "Sent " + s.name : "Could not send (too long for one message?)");
+                        if (!app.canShare()) a.toast("Connect a radio or the TAK link first");
+                        else a.toast(app.shareShape(s) ? "Sent " + s.name + (app.gmrs() && app.radio.isConnected() ? " (thinned to fit one GMRS burst)" : "")
+                                : "Could not send (too long for one message?)");
                     } else if (act.equals(FOLLOW)) {
                         // start from the point nearest to me
                         int best = 0;
@@ -543,7 +573,7 @@ class MapTools {
         app.store.touchShapes(); // hide the saved copy while its draft is on screen
         a.refreshMarkers();
         updateDraw();
-        a.toast("UNDO removes corners from the end. Add new ones, then DONE.");
+        a.toast("Hold a corner, then tap where it should go. UNDO removes the last one. DONE saves.");
     }
 
     // =====================================================================
@@ -812,7 +842,8 @@ class MapTools {
         url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setText(app.prefs.getString("customUrl", ""));
         TextView help = new TextView(a);
-        help.setText("Any map server with standard tiles works. The address must contain {z}, {x} and {y}. Check the provider allows it.");
+        help.setText("Any map server with standard tiles works. The address must contain {z}, {x} and {y}. Check the provider allows it. "
+                + "Addresses starting with http:// (not https) work too, but are not encrypted: fine for a server on your own Wi-Fi.");
         help.setTextSize(12);
         box.addView(name);
         box.addView(url);

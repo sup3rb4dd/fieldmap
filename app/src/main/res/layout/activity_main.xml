@@ -104,6 +104,30 @@
     </LinearLayout>
 
         <TextView
+            android:id="@+id/tvGmrs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:padding="8dp"
+            android:textColor="#FF000000"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.04"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvUpdate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/hud_panel"
+            android:padding="8dp"
+            android:textColor="@color/accent"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
             android:id="@+id/tvSos"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

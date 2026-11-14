@@ -90,7 +90,7 @@ public class Store {
         p.lon = lon;
         p.time = System.currentTimeMillis();
         pins.put(p.id, p);
-        save();
+        save(PINS);
         return p;
     }
 
@@ -111,7 +111,7 @@ public class Store {
         p.lon = lon;
         p.comment = comment == null ? "" : comment;
         p.time = System.currentTimeMillis();
-        save();
+        save(PINS);
     }
 
     public Shape addMyShape(String name, boolean closed, List<double[]> pts, String src) {
@@ -124,7 +124,7 @@ public class Store {
         s.time = System.currentTimeMillis();
         shapes.put(s.id, s);
         shapesRev++;
-        save();
+        save(SHAPES);
         return s;
     }
 
@@ -141,14 +141,14 @@ public class Store {
         s.pts = new ArrayList<>(pts);
         s.time = System.currentTimeMillis();
         shapesRev++;
-        save();
+        save(SHAPES);
     }
 
     public void removeShape(String id) {
-        if (shapes.remove(id) != null) { shapesRev++; save(); }
+        if (shapes.remove(id) != null) { shapesRev++; save(SHAPES); }
     }
 
-    public void touchShapes() { shapesRev++; save(); }
+    public void touchShapes() { shapesRev++; save(SHAPES); }
 
     /** Names of the files things were imported from. */
     public java.util.Set<String> importSources() {
@@ -164,7 +164,7 @@ public class Store {
         for (Iterator<Pin> it = pins.values().iterator(); it.hasNext(); ) if (src.equals(it.next().src)) { it.remove(); n++; }
         for (Iterator<Shape> it = shapes.values().iterator(); it.hasNext(); ) if (src.equals(it.next().src)) { it.remove(); n++; }
         shapesRev++;
-        save();
+        save(PINS | SHAPES);
         return n;
     }
 
@@ -177,7 +177,7 @@ public class Store {
         p.src = src;
         p.time = System.currentTimeMillis();
         pins.put(p.id, p);
-        save();
+        save(PINS);
         return p;
     }
 
@@ -219,13 +219,13 @@ public class Store {
             } catch (Exception ignored) {
             }
         }
-        if (n > 0) { shapesRev++; save(); }
+        if (n > 0) { shapesRev++; save(SHAPES); }
         return n;
     }
 
     public void removePin(String id) {
         pins.remove(id);
-        save();
+        save(PINS);
     }
 
     public void upsertStation(String call, double lat, double lon, char table, char code, String comment) {
@@ -253,17 +253,17 @@ public class Store {
         s.code = code;
         s.comment = comment == null ? "" : comment;
         s.time = time;
-        save();
+        save(STATIONS);
     }
 
     public void renameStation(String call, String name) {
         Station s = stations.get(call);
-        if (s != null && name != null && !name.isEmpty() && !name.equals(s.name)) { s.name = name; save(); }
+        if (s != null && name != null && !name.isEmpty() && !name.equals(s.name)) { s.name = name; save(STATIONS); }
     }
 
     public void removeStation(String call) {
         stations.remove(call);
-        save();
+        save(STATIONS);
     }
 
     public Msg addMessage(String from, String to, String text, String id, boolean out) {
@@ -282,18 +282,40 @@ public class Store {
         messages.add(m);
         while (messages.size() > 300) messages.remove(0);
         if (!out) unread++;
-        save();
+        save(MSGS);
         return m;
     }
 
-    /** True if an identical incoming message was already received recently (APRS retries). */
+    /**
+     * True if this incoming message is a repeat of one already shown. Numbered messages are
+     * re-sent by the other radio until acknowledged, so the same number from the same station
+     * within 30 minutes is a repeat. Un-numbered ones (team chat) only count as repeats for 20
+     * seconds, long enough to catch the copy a relay station re-sends, short enough that a
+     * second "OK" a minute later still shows.
+     */
     public boolean isDuplicate(String from, String text, String id) {
         long now = System.currentTimeMillis();
+        boolean numbered = id != null && !id.isEmpty();
+        long window = numbered ? 30 * 60 * 1000L : 20 * 1000L;
         for (int i = messages.size() - 1; i >= 0 && i >= messages.size() - 30; i--) {
             Msg m = messages.get(i);
-            if (m.out || now - m.time > 30 * 60 * 1000L) continue;
-            if (m.from.equalsIgnoreCase(from) && m.text.equals(text)
-                    && ((m.id == null && id == null) || (m.id != null && m.id.equals(id)))) return true;
+            if (m.out || now - m.time > window) continue;
+            if (!m.from.equalsIgnoreCase(from) || !m.text.equals(text)) continue;
+            if (numbered ? id.equals(m.id) : (m.id == null || m.id.isEmpty())) return true;
+        }
+        return false;
+    }
+
+    /** A Meshtastic receipt came back for one of my messages. Direct messages only count when the receipt is from the person it was for. */
+    public boolean ackMesh(String id, String fromNodeId) {
+        for (int i = messages.size() - 1; i >= 0 && i >= messages.size() - 40; i--) {
+            Msg m = messages.get(i);
+            if (!m.out || !id.equals(m.id)) continue;
+            if (m.to != null && m.to.startsWith("!") && !m.to.equalsIgnoreCase(fromNodeId)) return false;
+            if (m.acked) return false;
+            m.acked = true;
+            save(MSGS);
+            return true;
         }
         return false;
     }
@@ -303,7 +325,7 @@ public class Store {
             Msg m = messages.get(i);
             if (m.out && id.equals(m.id) && m.to.equalsIgnoreCase(to)) {
                 m.acked = true;
-                save();
+                save(MSGS);
                 return;
             }
         }
@@ -311,7 +333,7 @@ public class Store {
 
     public void clearStations() {
         stations.clear();
-        save();
+        save(STATIONS);
     }
 
     // ---------- persistence ----------
@@ -319,11 +341,26 @@ public class Store {
     private final android.os.Handler saver = new android.os.Handler(android.os.Looper.getMainLooper());
     private boolean savePending = false;
 
-    /** Schedules a write. Bursts (like a 200-node mesh database arriving) become one write. */
-    public void save() {
-        if (savePending) return;
+    public static final int PINS = 1, STATIONS = 2, MSGS = 4, SHAPES = 8, ALL = 15;
+    /** Which parts changed since the last write: only those are written again. */
+    private int dirty = 0;
+    private long pendingDelay = 0;
+
+    /** Schedules a write of everything. */
+    public void save() { save(ALL); }
+
+    /**
+     * Schedules a write of the parts that changed. Bursts (like a 200-node mesh database arriving)
+     * become one write, and positions alone, which change with every packet, wait a little longer.
+     */
+    public void save(int what) {
+        dirty |= what;
+        long delay = dirty == STATIONS ? 3000 : 400;
+        if (savePending && delay >= pendingDelay) return;
+        saver.removeCallbacksAndMessages(null);
         savePending = true;
-        saver.postDelayed(this::flush, 400);
+        pendingDelay = delay;
+        saver.postDelayed(this::flush, delay);
     }
 
     private static JSONObject pinJson(Pin p) throws org.json.JSONException {
@@ -367,38 +404,52 @@ public class Store {
             } catch (Exception ignored) {
             }
         }
-        if (n > 0) save();
+        if (n > 0) save(PINS);
         return n;
     }
 
-    /** Writes to storage right now. */
+    /** Writes what changed to storage right now. */
     public void flush() {
         saver.removeCallbacksAndMessages(null);
         savePending = false;
+        int d = dirty;
+        dirty = 0;
+        SharedPreferences.Editor ed = sp.edit().putInt("unread", unread);
         try {
-            JSONArray jp = new JSONArray();
-            for (Pin p : pins.values()) jp.put(pinJson(p));
-            JSONArray js = new JSONArray();
-            for (Station s : stations.values()) {
-                JSONObject o = new JSONObject();
-                o.put("call", s.call); o.put("lat", s.lat); o.put("lon", s.lon); o.put("time", s.time);
-                o.put("table", String.valueOf(s.table)); o.put("code", String.valueOf(s.code)); o.put("comment", s.comment);
-                o.put("name", s.name); o.put("via", s.via); o.put("checkTime", s.checkTime);
-                js.put(o);
+            if ((d & PINS) != 0) {
+                JSONArray jp = new JSONArray();
+                for (Pin p : pins.values()) jp.put(pinJson(p));
+                ed.putString("pins", jp.toString());
             }
-            JSONArray jm = new JSONArray();
-            for (Msg m : messages) {
-                JSONObject o = new JSONObject();
-                o.put("from", m.from); o.put("to", m.to); o.put("text", m.text); o.put("id", m.id == null ? "" : m.id);
-                o.put("time", m.time); o.put("out", m.out); o.put("acked", m.acked); o.put("via", m.via);
-                jm.put(o);
+            if ((d & STATIONS) != 0) {
+                JSONArray js = new JSONArray();
+                for (Station s : stations.values()) {
+                    JSONObject o = new JSONObject();
+                    o.put("call", s.call); o.put("lat", s.lat); o.put("lon", s.lon); o.put("time", s.time);
+                    o.put("table", String.valueOf(s.table)); o.put("code", String.valueOf(s.code)); o.put("comment", s.comment);
+                    o.put("name", s.name); o.put("via", s.via); o.put("checkTime", s.checkTime);
+                    js.put(o);
+                }
+                ed.putString("stations", js.toString());
             }
-            JSONArray jsh = new JSONArray();
-            for (Shape s : shapes.values()) jsh.put(shapeJson(s));
-            sp.edit().putString("pins", jp.toString()).putString("stations", js.toString()).putString("shapes", jsh.toString())
-                    .putString("messages", jm.toString()).putInt("unread", unread).apply();
+            if ((d & MSGS) != 0) {
+                JSONArray jm = new JSONArray();
+                for (Msg m : messages) {
+                    JSONObject o = new JSONObject();
+                    o.put("from", m.from); o.put("to", m.to); o.put("text", m.text); o.put("id", m.id == null ? "" : m.id);
+                    o.put("time", m.time); o.put("out", m.out); o.put("acked", m.acked); o.put("via", m.via);
+                    jm.put(o);
+                }
+                ed.putString("messages", jm.toString());
+            }
+            if ((d & SHAPES) != 0) {
+                JSONArray jsh = new JSONArray();
+                for (Shape s : shapes.values()) jsh.put(shapeJson(s));
+                ed.putString("shapes", jsh.toString());
+            }
         } catch (Exception ignored) {
         }
+        ed.apply();
     }
 
     private void load() {
@@ -453,6 +504,6 @@ public class Store {
         for (Iterator<Station> it = stations.values().iterator(); it.hasNext(); ) {
             if (now - it.next().time > maxAgeMs) { it.remove(); changed = true; }
         }
-        if (changed) save();
+        if (changed) save(STATIONS);
     }
 }

@@ -25,14 +25,27 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
     private ArrayAdapter<Store.Msg> adapter;
     private EditText to, input;
     private TextView header;
-    private final SimpleDateFormat fmt = new SimpleDateFormat("ddHHmm'Z'", Locale.US);
-    { fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC")); }
+    private SimpleDateFormat fmt;
+
+    /** The box only accepts what the links for this destination can carry. */
+    private void applyLimit() {
+        int max = app.maxText(to.getText().toString());
+        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(max)});
+        if (input.getText().length() > max) input.setText(input.getText().subSequence(0, max));
+        input.setHint(app.lbl("ENTER TRAFFIC_", "Type a message") + " (" + max + " max)");
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         app = FieldMapApp.get();
         setContentView(R.layout.activity_chat);
+        if (app.prefs.getBoolean("localTime", false)) {
+            fmt = new SimpleDateFormat("HH:mm", Locale.US);
+        } else {
+            fmt = new SimpleDateFormat("ddHHmm'Z'", Locale.US);
+            fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        }
         header = findViewById(R.id.chatHeader);
         to = findViewById(R.id.chatTo);
         input = findViewById(R.id.chatInput);
@@ -40,6 +53,11 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
 
         String extraTo = getIntent().getStringExtra("to");
         to.setText(extraTo != null ? extraTo : app.group());
+        to.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable e) { applyLimit(); }
+        });
 
         adapter = new ArrayAdapter<Store.Msg>(this, android.R.layout.simple_list_item_1, app.store.messages) {
             @Override
@@ -49,14 +67,19 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
                 String time = fmt.format(new Date(m.time));
                 boolean team = m.to.equalsIgnoreCase(app.group());
                 String via = m.via == null ? "APRS" : m.via;
-                String who = m.out ? "SELF ▸ " + (team ? "NET" : app.displayName(m.to))
-                        : app.displayName(m.from) + " ▸ " + (team ? "NET" : "SELF");
-                String status = m.out && m.id != null ? (m.acked ? "  [ACK]" : "  [PEND]") : "";
+                String net = app.lbl("NET", "TEAM"), self = app.lbl("SELF", "ME");
+                String who = m.out ? self + " ▸ " + (team ? net : app.displayName(m.to))
+                        : app.displayName(m.from) + " ▸ " + (team ? net : self);
+                boolean meshOnly = m.id != null && m.id.startsWith("m");
+                String status = !m.out || m.id == null ? ""
+                        : m.acked ? (meshOnly && team ? "  ✓ HEARD ON THE MESH" : "  ✓ DELIVERED")
+                        : "  … SENT, NOT CONFIRMED YET";
                 boolean hasGrid = Tac.findGrid(m.text) != null;
                 tv.setText("[" + time + "] " + who.toUpperCase(Locale.US) + "  <" + via + ">\n> " + m.text + status
                         + (hasGrid ? "\n  ⌖ TAP FOR MAP" : ""));
                 boolean sos = Tac.isSos(m.text);
                 int color = sos ? Color.parseColor("#FFFF3B30") : m.out ? Color.parseColor("#FF39FF14")
+                        : via.contains("GMRS") ? Color.parseColor("#FFFFB000")
                         : via.contains("MESH") ? Color.parseColor("#FF00E5FF")
                         : via.contains("TAK") ? Color.parseColor("#FF7FB2FF") : Color.parseColor("#FFA8FFA0");
                 tv.setTextColor(color);
@@ -100,7 +123,7 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
             if (l == null) { toast("No GPS fix yet"); return; }
             String cur = input.getText().toString().trim();
             String withGrid = Tac.withGrid(cur.isEmpty() ? "AT" : cur, l.getLatitude(), l.getLongitude());
-            if (withGrid.length() > 67) { toast("Message too long to add a grid"); return; }
+            if (withGrid.length() > app.maxText(to.getText().toString())) { toast("Message too long to add a grid"); return; }
             input.setText(withGrid);
             input.setSelection(input.getText().length());
         });
@@ -122,26 +145,38 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
             if (!app.mesh.isConnected()) { toast("Meshtastic radio not connected"); return; }
         } else if (!dest.equalsIgnoreCase(app.group())) {
             if (!app.radio.isConnected()) { toast("UV-PRO not connected"); return; }
-            if (!app.hasCallsign()) { toast("Set your callsign in Settings to send over APRS"); return; }
+            if (!app.hasCallsign()) { toast(app.gmrs() ? "Finish GMRS setup in Settings (callsign and unit name)" : "Set your callsign in Settings to send over APRS"); return; }
         } else if (!app.canShare()) {
-            if (app.canTransmit() && !app.aprsTeam())
+            if (app.mesh.isConnected() && !app.meshTeamOk())
+                toast("Team traffic is held: your mesh team channel is 0, which may be public. Open the map to confirm, or pick your channel in Settings ▸ Privacy");
+            else if (app.canTransmit() && !app.aprsTeam())
                 toast("Team chat over APRS is off (APRS is public). Connect Meshtastic or allow it in Config ▸ Privacy");
             else
-                toast(app.radio.isConnected() ? "Set your callsign in Settings to send over APRS" : "Connect a radio first");
+                toast(!app.radio.isConnected() ? "Connect a radio first" : app.gmrs() ? "Finish GMRS setup in Settings (callsign and unit name)"
+                        : "Set your callsign in Settings to send over APRS");
             return;
         }
-        if (app.sendMessage(dest, text)) input.setText("");
+        if (app.sendMessage(dest, text)) {
+            input.setText("");
+            if (app.gmrs() && app.radio.isConnected()) {
+                int w = app.gmrsWaitSeconds(), n = app.gmrsQueue.size();
+                if (n > 0) toast("GMRS: goes out in about " + (w + (n - 1) * 30) + " s (one burst every 30 s)");
+            }
+        }
         else toast("Send failed — check the packet log");
     }
 
     private void refresh() {
-        app.store.unread = 0;
-        app.store.save();
+        if (app.store.unread != 0) { app.store.unread = 0; app.store.save(Store.MSGS); }
         adapter.notifyDataSetChanged();
-        String links = (app.radio.isConnected() ? "APRS▲ " : "APRS· ") + (app.mesh.isConnected() ? "MESH▲" : "MESH·")
+        String rl = app.radioLabel();
+        String links = (app.radio.isConnected() ? rl + "▲ " : rl + "· ") + (app.mesh.isConnected() ? (app.meshTeamOk() ? "MESH▲" : "MESH▲(HELD)") : "MESH·")
                 + (app.tak.getState() == RadioLink.State.OFF ? "" : app.tak.isConnected() ? " TAK▲" : " TAK·");
-        header.setText("◆ NET: " + app.group() + "    OP: " + (app.hasCallsign() ? app.myCall() : "NO CALLSIGN")
-                + "\n■ LINKS: " + links);
+        String gm = !app.gmrs() ? "" : "\n▲ GMRS MODE ON · " + (app.gmrsReady() ? app.gmrsCall() + " · NOT ENCRYPTED · 1 BURST / 30 S" : "SETUP NOT FINISHED");
+        header.setText("◆ " + app.lbl("NET", "TEAM") + ": " + app.group() + "    " + app.lbl("OP", "ME") + ": " + (app.hasCallsign() ? app.myCall() : "NO CALLSIGN")
+                + "\n■ LINKS: " + links + gm);
+        header.setTextColor(androidx.core.content.ContextCompat.getColor(this, app.gmrs() ? R.color.warn : R.color.accent));
+        applyLimit();
     }
 
     @Override protected void onResume() {

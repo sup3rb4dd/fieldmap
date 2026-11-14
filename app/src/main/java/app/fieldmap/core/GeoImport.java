@@ -28,8 +28,11 @@ public final class GeoImport {
 
     public static List<Item> parse(byte[] file) throws IOException {
         if (file.length > 3 && file[0] == 'P' && file[1] == 'K') file = unzipKml(file);
-        String head = new String(file, 0, Math.min(file.length, 4096), StandardCharsets.UTF_8);
-        if (head.contains("<!ENTITY")) throw new IOException("file not accepted");
+        // entity definitions can be used to attack XML readers; no real map file needs them.
+        // The whole file is checked, and so are 16-bit encodings that would hide the text from this check.
+        if (file.length >= 2 && ((file[0] == (byte) 0xFE && file[1] == (byte) 0xFF) || (file[0] == (byte) 0xFF && file[1] == (byte) 0xFE)
+                || file[0] == 0 || file[1] == 0)) throw new IOException("file not accepted");
+        if (new String(file, StandardCharsets.ISO_8859_1).contains("<!ENTITY")) throw new IOException("file not accepted");
         Document doc;
         try {
             DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
