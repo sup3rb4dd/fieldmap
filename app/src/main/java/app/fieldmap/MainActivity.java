@@ -443,10 +443,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void syncTrail() {
         boolean on = app.prefs.getBoolean("trails", true);
-        trailLine.setVisible(on);
-        if (!on) return;
+        if (!on) { trailLine.setVisible(false); return; }
         int n = app.trail.size();
-        if (n == trailDrawn && n > 0) return;
+        if (n == trailDrawn && n > 0) { trailLine.setVisible(n >= 2); return; }
         if (n < trailDrawn || trailDrawn == 0 || n - trailDrawn > 50) {
             // first draw, cleared, trimmed, or far behind: rebuild (thinned out if very long)
             List<double[]> pts = app.trail.copy();
@@ -464,6 +463,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             }
         }
         trailDrawn = n;
+        trailLine.setVisible(n >= 2); // a line needs two points
         map.invalidate();
     }
 
