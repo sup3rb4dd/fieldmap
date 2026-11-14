@@ -126,11 +126,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         findViewById(R.id.btnLayer).setOnClickListener(v -> chooseLayer());
         findViewById(R.id.btnNorth).setOnClickListener(v -> map.setMapOrientation(0));
         tvClock = findViewById(R.id.tvClock);
-        findViewById(R.id.btnNvg).setOnClickListener(v -> {
-            app.prefs.edit().putBoolean("nvg", !app.prefs.getBoolean("nvg", false)).apply();
-            applyNvg();
-        });
-        applyNvg();
+
         findViewById(R.id.btnClearTarget).setOnClickListener(v -> { target = null; refreshTarget(); });
         btnChat.setOnClickListener(v -> startActivity(new Intent(this, ChatActivity.class)));
         findViewById(R.id.btnList).setOnClickListener(v -> showList());
@@ -322,25 +318,6 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             clockHandler.postDelayed(this, 1000);
         }
     };
-
-    /** Night-vision look: map imagery turned to phosphor green. */
-    private void applyNvg() {
-        boolean on = app.prefs.getBoolean("nvg", false);
-        org.osmdroid.views.overlay.TilesOverlay tiles = map.getOverlayManager().getTilesOverlay();
-        if (on) {
-            android.graphics.ColorMatrix cm = new android.graphics.ColorMatrix(new float[]{
-                    0.05f, 0.10f, 0.02f, 0, 0,
-                    0.35f, 0.75f, 0.15f, 0, 10,
-                    0.05f, 0.10f, 0.02f, 0, 0,
-                    0, 0, 0, 1, 0});
-            tiles.setColorFilter(new android.graphics.ColorMatrixColorFilter(cm));
-        } else {
-            tiles.setColorFilter(null);
-        }
-        Button b = findViewById(R.id.btnNvg);
-        b.setText(on ? "NVG●" : "NVG");
-        map.invalidate();
-    }
 
     private void chooseLayer() {
         new AlertDialog.Builder(this)

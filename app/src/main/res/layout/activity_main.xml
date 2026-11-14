@@ -110,7 +110,6 @@
         <Button android:id="@+id/btnPin" style="@style/RoundButton" android:text="+WPT" />
         <Button android:id="@+id/btnGrid" style="@style/RoundButton" android:text="GRID" />
         <Button android:id="@+id/btnLayer" style="@style/RoundButton" android:text="LYR" />
-        <Button android:id="@+id/btnNvg" style="@style/RoundButton" android:text="NVG" />
         <Button android:id="@+id/btnNorth" style="@style/RoundButton" android:text="N↑" />
     </LinearLayout>
 
