@@ -237,6 +237,30 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         map.setTilesScaledToDpi(false); // also re-applies the tile size
     }
 
+    /** Shows when map imagery is still loading or missing, so blur isn't a mystery. */
+    private void updateTileStatus() {
+        TextView tv = findViewById(R.id.tvTiles);
+        try {
+            org.osmdroid.util.TileStates ts = map.getOverlayManager().getTilesOverlay().getTileStates();
+            int total = ts.getTotal();
+            int good = ts.getUpToDate() + ts.getExpired();
+            int missing = ts.getNotFound();
+            int loading = total - good - missing;
+            if (total == 0 || (loading <= 0 && missing == 0)) { tv.setVisibility(android.view.View.GONE); return; }
+            tv.setVisibility(android.view.View.VISIBLE);
+            if (loading > 0) {
+                tv.setTextColor(ContextCompat.getColor(this, R.color.warn));
+                tv.setText(String.format(Locale.US, "IMG LOADING %d/%d · Z%d — close zoom can take 15s",
+                        good, total, (int) map.getZoomLevelDouble()));
+            } else {
+                tv.setTextColor(ContextCompat.getColor(this, R.color.bad));
+                tv.setText(missing + " TILES UNAVAILABLE · try LYR ▸ alternate server");
+            }
+        } catch (Exception e) {
+            tv.setVisibility(android.view.View.GONE);
+        }
+    }
+
     /** Fetches one normal and one HD tile at the map center and reports what the servers sent back. */
     private void runMapDiagnostics() {
         IGeoPoint c = map.getMapCenter();
@@ -256,6 +280,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .show();
         new Thread(() -> {
             StringBuilder r = new StringBuilder(sb);
+            String[] hdServers = {Tiles.USGS_NAIP, Tiles.GEOPLATFORM_NAIP};
             for (int z : new int[]{16, 18}) {
                 int n = 1 << z;
                 int x = (int) Math.floor((lon + 180) / 360 * n);
@@ -269,6 +294,18 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     continue;
                 }
                 r.append("\n\nz").append(z).append(": ").append(probe(url));
+            }
+            // also try both close-zoom imagery servers directly, whatever layer is showing
+            int z = 18, n = 1 << z;
+            int x = (int) Math.floor((lon + 180) / 360 * n);
+            double latR = Math.toRadians(lat);
+            int y = (int) Math.floor((1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n);
+            double half = 20037508.342789244, size = 2 * half / n;
+            double xmin = -half + x * size, ymax = half - y * size;
+            for (String srv : hdServers) {
+                String u = srv + "?bbox=" + xmin + "," + (ymax - size) + "," + (xmin + size) + "," + ymax
+                        + "&bboxSR=3857&imageSR=3857&size=256,256&format=jpg&f=image";
+                r.append("\n\nHD ").append(srv.contains("geoplatform") ? "ALT" : "USGS").append(": ").append(probe(u));
             }
             app.log("Map diagnostics:\n" + r);
             runOnUiThread(() -> { if (dlg.isShowing()) dlg.setMessage(r + "\n\n(Copied to Packet log)"); });
@@ -321,6 +358,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("ddHHmm'Z' MMMyy", Locale.US);
             f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
             tvClock.setText(f.format(new java.util.Date()).toUpperCase(Locale.US));
+            updateTileStatus();
             clockHandler.postDelayed(this, 1000);
         }
     };

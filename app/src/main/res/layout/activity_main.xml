@@ -185,5 +185,15 @@
                 android:textColor="@color/text"
                 android:textSize="13sp" />
         </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvTiles"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="@color/warn"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
     </LinearLayout>
 </FrameLayout>

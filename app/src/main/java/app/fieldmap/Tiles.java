@@ -33,11 +33,15 @@ public final class Tiles {
         private final String cached, naip;
 
         UsgsImageryHd(String name, String cachedService) {
+            this(name, cachedService, USGS_NAIP);
+        }
+
+        UsgsImageryHd(String name, String cachedService, String naipExport) {
             super(name, 0, 19, 256, "",
                     new String[]{"https://basemap.nationalmap.gov/arcgis/rest/services/" + cachedService + "/MapServer/tile/"},
                     "USGS The National Map / NAIP");
             cached = "https://basemap.nationalmap.gov/arcgis/rest/services/" + cachedService + "/MapServer/tile/";
-            naip = "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage";
+            naip = naipExport;
         }
 
         @Override
@@ -52,11 +56,18 @@ public final class Tiles {
         }
     }
 
+    /** NAIP image services that can render close-zoom imagery on request. */
+    public static final String USGS_NAIP =
+            "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage";
+    public static final String GEOPLATFORM_NAIP =
+            "https://imagery.geoplatform.gov/iipp/rest/services/NAIP/NAIP_plus/ImageServer/exportImage";
+
     public static final String[] NAMES = {
             "USGS Topo (offline OK)",
             "USGS Satellite HD (offline OK)",
             "USGS Satellite + Topo (offline OK)",
-            "OpenStreetMap (online only)"
+            "OpenStreetMap (online only)",
+            "Satellite HD · alternate server (offline OK)"
     };
 
     public static ITileSource byIndex(int i) {
@@ -64,6 +75,7 @@ public final class Tiles {
             case 1: return new UsgsImageryHd("USGSImageryHD", "USGSImageryOnly");
             case 2: return new Usgs("USGSImageryTopo", "USGSImageryTopo", 16);
             case 3: return TileSourceFactory.MAPNIK;
+            case 4: return new UsgsImageryHd("GeoPlatformImageryHD", "USGSImageryOnly", GEOPLATFORM_NAIP);
             default: return new Usgs("USGSTopo", "USGSTopo", 16);
         }
     }
@@ -73,6 +85,7 @@ public final class Tiles {
         switch (i) {
             case 1: return 19;
             case 3: return 19;
+            case 4: return 19;
             default: return 16;
         }
     }
