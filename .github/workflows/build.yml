@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -24,7 +24,15 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon 2>&1 | tee build.log
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          msg=$(grep -E "error:|warning: \[|What went wrong|Could not|Execution failed|> |\.java:[0-9]+|\.xml" build.log | grep -v "^> Task" | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+          echo "::error title=Build errors::$msg"
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk FieldMap.apk
