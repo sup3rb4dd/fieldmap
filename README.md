@@ -9,6 +9,10 @@ A simple, free, ATAK-style map for Android that talks to your **BTECH UV-PRO** (
 - **Range & bearing** to any pin, station or typed-in MGRS grid
 - **Team positions**: everyone's radio beacons show up on the map
 - **Team chat**: APRS messages to your team name, or direct to a callsign (with delivery ✓)
+- **Draw routes and areas**, measure them, follow a route point to point, and share them with the team
+- **Terrain**: ground elevation at the crosshair, and a line-of-sight check with a terrain profile between you and any point
+- **Works with ATAK / WinTAK / iTAK** over shared Wi-Fi or a plain-TCP TAK server: positions, markers, drawings and group chat
+- **Import KML, KMZ and GPX files**; add any z/x/y map server or a raster MBTiles file as a map layer
 - **SOS**: one button sends your name and grid to the team every 2 minutes; their phones sound an alarm and show you in red
 - **Check-in and quick messages**: "OK + my grid" in one tap; tap any grid in chat to see it on the map
 - **Steering arrow, ETA and compass**: track a waypoint or teammate and follow the arrow; hold N↑ for a heading-up map

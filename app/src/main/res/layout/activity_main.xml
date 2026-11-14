@@ -138,6 +138,7 @@
 
         <Button android:id="@+id/btnMe" style="@style/RoundButton" android:text="POS" />
         <Button android:id="@+id/btnPin" style="@style/RoundButton" android:text="+WPT" />
+        <Button android:id="@+id/btnDraw" style="@style/RoundButton" android:text="DRAW" />
         <Button android:id="@+id/btnGrid" style="@style/RoundButton" android:text="GRID" />
         <Button android:id="@+id/btnLayer" style="@style/RoundButton" android:text="LYR" />
         <Button android:id="@+id/btnNorth" style="@style/RoundButton" android:text="N↑" />
@@ -157,6 +158,30 @@
         android:paddingEnd="12dp"
         android:paddingTop="10dp"
         android:paddingBottom="10dp">
+
+        <LinearLayout
+            android:id="@+id/drawRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+            <TextView
+                android:id="@+id/tvDraw"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#FFFFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+            <Button android:id="@+id/btnUndo" style="@style/BarButton"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="UNDO" />
+            <Button android:id="@+id/btnDone" style="@style/BarButton"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DONE" />
+            <Button android:id="@+id/btnDrawCancel" style="@style/BarButton"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✕" />
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/targetRow"

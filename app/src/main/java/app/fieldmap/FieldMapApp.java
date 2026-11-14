@@ -17,7 +17,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import app.fieldmap.core.Aprs;
 import app.fieldmap.core.Ax25;
 import app.fieldmap.core.Kiss;
+import app.fieldmap.core.Cot;
 import app.fieldmap.core.Mesh;
+import app.fieldmap.core.Shapes;
 import app.fieldmap.core.Tac;
 import app.fieldmap.core.Trail;
 
@@ -26,7 +28,7 @@ import java.util.Map;
 import java.util.Random;
 
 /** App-wide state: settings, saved data, the radio link and APRS handling. */
-public class FieldMapApp extends Application implements RadioLink.Callback, MeshLink.Callback {
+public class FieldMapApp extends Application implements RadioLink.Callback, MeshLink.Callback, TakLink.Callback {
 
     public interface Listener {
         void onDataChanged();
@@ -53,6 +55,10 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public volatile boolean serviceRunning = false;
     public Trail trail;
     public Weather weather;
+    public Elevation elev;
+    public TakLink tak;
+    private final Map<String, String> takNames = new HashMap<>();
+    private long lastTakBeacon = 0;
     /** True while the map screen is on top. */
     public boolean mapVisible = false;
     private boolean autoTried = false;
@@ -85,6 +91,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         trail = new Trail(new java.io.File(getFilesDir(), "track.csv"));
         trail.load();
         weather = new Weather(this);
+        elev = new Elevation(this);
+        tak = new TakLink(this, this);
         main.postDelayed(overdueTask, 60_000);
     }
 
@@ -166,6 +174,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public void autoConnect() {
         if (autoTried) return;
         autoTried = true;
+        applyTakSettings();
         if (!prefs.getBoolean("autoConnect", true)) return;
         try {
             if (android.os.Build.VERSION.SDK_INT >= 31 && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
@@ -192,7 +201,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
 
     /** Starts/stops the background service to match settings and radio state. */
     public void updateService() {
-        boolean want = background() && (radio.getState() != RadioLink.State.OFF || mesh.getState() != RadioLink.State.OFF);
+        boolean want = background() && (radio.getState() != RadioLink.State.OFF || mesh.getState() != RadioLink.State.OFF
+                || tak.getState() != RadioLink.State.OFF);
         if (want && !serviceRunning) FieldMapService.start(this);
         else if (!want && serviceRunning) FieldMapService.stop(this);
         else if (serviceRunning) Alerts.updateStatus(this);
@@ -211,7 +221,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public boolean canTransmit() { return hasCallsign() && radio.isConnected(); }
 
     /** Anything that can send right now: APRS (with callsign) or Meshtastic. */
-    public boolean canShare() { return mesh.isConnected() || (canTransmit() && aprsTeam()); }
+    public boolean canShare() { return mesh.isConnected() || tak.isConnected() || (canTransmit() && aprsTeam()); }
 
     /** Friendly name for a callsign or Meshtastic node id. */
     public String displayName(String key) {
@@ -223,6 +233,10 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                 String n = nodeNames.get((int) Long.parseLong(key.substring(1), 16));
                 if (n != null) return n;
             } catch (NumberFormatException ignored) { }
+        }
+        if (key.startsWith("tak:")) {
+            String n = takNames.get(key.substring(4));
+            return n != null && !n.isEmpty() ? n : "TAK user";
         }
         return key;
     }
@@ -297,7 +311,149 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
             if (ok) lastBeacon = System.currentTimeMillis();
         }
         if (mesh.isConnected()) ok |= meshBeacon();
+        if (tak.isConnected()) ok |= takBeacon();
         return ok;
+    }
+
+    // ---------- TAK (ATAK / WinTAK / iTAK) ----------
+
+    /** My id on TAK networks: random, made once, kept. */
+    public String takUid() {
+        String u = prefs.getString("takUid", "");
+        if (u.isEmpty()) {
+            u = "FIELDMAP-" + Long.toHexString(rnd.nextLong() & 0xFFFFFFFFFFL);
+            prefs.edit().putString("takUid", u).apply();
+        }
+        return u;
+    }
+
+    public String takCallsign() {
+        String c = prefs.getString("takCall", "").trim();
+        return c.isEmpty() ? myName() : c;
+    }
+
+    /** Starts or stops the TAK link to match Settings. */
+    public void applyTakSettings() {
+        boolean lan = prefs.getBoolean("takLan", false);
+        String server = prefs.getString("takServer", "").trim();
+        String host = server;
+        int port = 8087;
+        int colon = server.lastIndexOf(':');
+        if (colon > 0) {
+            try {
+                port = Integer.parseInt(server.substring(colon + 1).trim());
+                host = server.substring(0, colon).trim();
+            } catch (NumberFormatException ignored) { }
+        }
+        String sig = lan + "|" + host + "|" + port;
+        if (sig.equals(takSig)) return;
+        takSig = sig;
+        tak.configure(lan, host, port, takUid());
+    }
+    private String takSig = "false||8087";
+    private final java.util.LinkedHashSet<String> takSeen = new java.util.LinkedHashSet<>();
+
+    private boolean takBeacon() {
+        Location l = lastLoc;
+        if (l == null || !tak.isConnected()) return false;
+        boolean ok = tak.send(Cot.pli(takUid(), takCallsign(), l.getLatitude(), l.getLongitude(),
+                l.hasAltitude() ? l.getAltitude() : Double.NaN, l.hasSpeed() ? l.getSpeed() : 0,
+                l.hasBearing() ? l.getBearing() : 0, "0.3"), false);
+        if (ok) lastTakBeacon = System.currentTimeMillis();
+        return ok;
+    }
+
+    @Override
+    public void onTakState(RadioLink.State state, String detail) {
+        log("TAK " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
+        if (state == RadioLink.State.CONNECTED) lastTakBeacon = 0;
+        restartBeaconTask();
+        updateService();
+        notifyRadio();
+    }
+
+    @Override
+    public void onTakEvent(Cot.Event e) {
+        String mine = takUid();
+        if (mine.equals(e.uid) || mine.equals(e.fromUid) || (e.uid != null && e.uid.startsWith("FM-" + mine))) return;
+        long now = System.currentTimeMillis();
+        switch (e.kind) {
+            case PERSON: {
+                if (e.stale > 0 && e.stale < now - 5 * 60_000L) break; // an old position replayed by a server
+                String key = "tak:" + e.uid;
+                if (e.callsign != null && !e.callsign.isEmpty()) takNames.put(e.uid, e.callsign);
+                store.upsertStation(key, e.lat, e.lon, '/', '[', "", "TAK", e.callsign, now);
+                log("TAK RX position " + displayName(key));
+                notifyData();
+                break;
+            }
+            case MARKER: {
+                String id = "tak:" + e.uid;
+                boolean isNew = !store.pins.containsKey(id);
+                String name = e.callsign == null || e.callsign.isEmpty() ? "TAK point" : e.callsign;
+                String owner = e.fromUid == null || e.fromUid.isEmpty() ? "TAK" : displayName("tak:" + e.fromUid);
+                store.upsertRemotePin(id, owner, name, e.lat, e.lon, "");
+                log("TAK RX marker " + name);
+                if (isNew) Alerts.waypoint(this, owner, name);
+                notifyData();
+                break;
+            }
+            case SHAPE: {
+                String name = e.callsign == null || e.callsign.isEmpty() ? (e.closed ? "TAK area" : "TAK route") : e.callsign;
+                store.upsertRemoteShape("tak:" + e.uid, "TAK", name, e.closed, Shapes.limit(e.shape, 1500));
+                log("TAK RX shape " + name);
+                notifyData();
+                break;
+            }
+            case DELETE:
+                store.removePin("tak:" + e.deleteUid);
+                store.removeShape("tak:" + e.deleteUid);
+                notifyData();
+                break;
+            case CHAT: {
+                boolean all = Cot.ALL_CHAT.equals(e.chatRoom) || Cot.ALL_CHAT.equals(e.chatToUid);
+                boolean toMe = mine.equals(e.chatToUid);
+                if (!all && !toMe) break;
+                String key = "tak:" + (e.fromUid == null ? "" : e.fromUid);
+                if (e.fromCallsign != null && !e.fromCallsign.isEmpty() && e.fromUid != null) takNames.put(e.fromUid, e.fromCallsign);
+                // the same message can arrive twice (Wi-Fi and server): go by its id, not its text
+                if (e.uid != null && !e.uid.isEmpty()) {
+                    if (takSeen.contains(e.uid)) break;
+                    takSeen.add(e.uid);
+                    if (takSeen.size() > 300) takSeen.remove(takSeen.iterator().next());
+                }
+                log("TAK RX chat " + displayName(key) + ": " + e.chatText);
+                boolean sosRepeat = Tac.isSos(e.chatText) && isSos(key);
+                if (!sosRepeat) store.addMessage(key, all ? group() : myLabel(), e.chatText, null, false, "TAK");
+                if (!inspectText(key, "TAK", e.chatText)) Alerts.message(this, displayName(key), e.chatText, toMe);
+                notifyData();
+                break;
+            }
+            default:
+                break;
+        }
+        notifyRadio();
+    }
+
+    // ---------- routes and areas ----------
+
+    /** Sends a drawn route or area to the team: compact text on the mesh, a drawing on TAK. */
+    public boolean shareShape(Store.Shape s) {
+        boolean ok = false;
+        if (mesh.isConnected()) {
+            String text = Shapes.share(s.name, s.closed, s.pts);
+            if (text != null && mesh.send(Mesh.text(Mesh.BROADCAST, meshChannel(), text, newPacketId()))) {
+                log("MESH TX " + (s.closed ? "area " : "route ") + s.name);
+                ok = true;
+            }
+        }
+        if (tak.isConnected()) ok |= tak.send(Cot.shape("FM-" + takUid() + "-" + s.id, s.name, s.pts, s.closed), false);
+        if (ok) { s.shared = true; store.save(); }
+        return ok;
+    }
+
+    public void unshareShape(Store.Shape s) {
+        if (s.shared && tak.isConnected()) tak.send(Cot.delete("FM-" + takUid() + "-" + s.id, "u-d-f"), false);
     }
 
     private boolean meshBeacon() {
@@ -323,6 +479,10 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
             if (m) log("MESH TX waypoint " + p.name + (live ? "" : " (delete)"));
             ok |= m;
         }
+        if (tak.isConnected()) {
+            String uid = "FM-" + takUid() + "-" + p.id;
+            ok |= tak.send(live ? Cot.marker(uid, p.name, p.lat, p.lon, takUid(), takCallsign()) : Cot.delete(uid, "a-u-G"), false);
+        }
         if (ok && live) { p.shared = true; store.save(); }
         return ok;
     }
@@ -334,6 +494,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public boolean sendMessage(String to, String text) {
         String dest = to.trim();
         if (dest.startsWith("!")) return sendMeshDirect(dest.toLowerCase(Locale.US), text);
+        if (dest.startsWith("tak:")) { log("Direct messages to TAK users are not supported; send to the team"); return false; }
         dest = dest.toUpperCase(Locale.US);
         if (dest.equals(group())) {
             boolean ok = false;
@@ -343,10 +504,18 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                 ok = true; via = via.isEmpty() ? "MESH" : via + "+MESH";
                 log("MESH TX text to channel");
             }
+            if (takChat(text)) { ok = true; via = via.isEmpty() ? "TAK" : via + "+TAK"; }
             if (ok) { store.addMessage(myLabel(), dest, text, null, true, via); notifyData(); }
             return ok;
         }
         return sendAprsMessage(dest, text);
+    }
+
+    private boolean takChat(String text) {
+        if (!tak.isConnected()) return false;
+        Location l = lastLoc;
+        return tak.send(Cot.chat(takUid(), takCallsign(), text,
+                l == null ? Double.NaN : l.getLatitude(), l == null ? Double.NaN : l.getLongitude()), true);
     }
 
     private String myLabel() {
@@ -374,11 +543,12 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         String s = "";
         if (mesh.isConnected()) s = "MESHTASTIC (team channel " + meshChannel() + ", encrypted)";
         if (canTransmit()) s += (s.isEmpty() ? "" : "\n") + "APRS (public — anyone listening can read it)";
+        if (tak.isConnected()) s += (s.isEmpty() ? "" : "\n") + "TAK network (" + tak.describe().trim() + ")";
         return s;
     }
 
     public boolean startSos() {
-        if (!mesh.isConnected() && !canTransmit()) return false;
+        if (!mesh.isConnected() && !canTransmit() && !tak.isConnected()) return false;
         sosActive = true;
         sosStarted = System.currentTimeMillis();
         sosLogged = false;
@@ -403,6 +573,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         String via = "";
         if (mesh.isConnected() && mesh.send(Mesh.text(Mesh.BROADCAST, meshChannel(), text, newPacketId()))) via = "MESH";
         if (canTransmit() && sendInfo(Aprs.message(group(), text, null))) via = via.isEmpty() ? "APRS" : "APRS+" + via;
+        if (takChat(text)) via = via.isEmpty() ? "TAK" : via + "+TAK";
         return via;
     }
 
@@ -522,6 +693,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
             // LoRa airtime is precious: never more often than every 5 minutes on the mesh
             int meshSecs = Math.max(secs, 300);
             if (secs > 0 && mesh.isConnected() && now - lastMeshBeacon >= meshSecs * 1000L - 2000) meshBeacon();
+            // TAK devices expect a position about once a minute, or they grey you out
+            if (tak.isConnected() && now - lastTakBeacon >= 58_000L) takBeacon();
             main.postDelayed(this, 15000);
         }
     };
@@ -548,7 +721,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
 
     private void restartBeaconTask() {
         main.removeCallbacks(beaconTask);
-        if (radio.isConnected() || mesh.isConnected()) main.postDelayed(beaconTask, 15000);
+        if (radio.isConnected() || mesh.isConnected() || tak.isConnected()) main.postDelayed(beaconTask, tak.isConnected() ? 3000 : 15000);
     }
 
     // ---------- Meshtastic ----------
@@ -620,6 +793,17 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                 }
                 log("MESH RX text " + displayName(fromId) + ": " + e.text);
                 // an SOS repeats every 2 minutes: keep one line in chat, not thirty
+                Shapes.Shared shp = Shapes.parseShared(e.text);
+                if (shp != null) {
+                    // a route or area drawn by a teammate: put it on the map, and a readable line in chat
+                    store.upsertRemoteShape("ms:" + fromId + ":" + shp.name, displayName(fromId), shp.name, shp.closed, shp.pts);
+                    String note = (shp.closed ? "[AREA] " : "[ROUTE] ") + shp.name + " (" + shp.pts.size() + " pts, on your map)";
+                    log("MESH RX " + note);
+                    store.addMessage(fromId, broadcast ? group() : myLabel(), note, null, false, "MESH");
+                    Alerts.waypoint(this, displayName(fromId), shp.name);
+                    notifyData();
+                    break;
+                }
                 boolean sosRepeat = Tac.isSos(e.text) && isSos(fromId);
                 if (!sosRepeat) store.addMessage(fromId, broadcast ? group() : myLabel(), e.text, null, false, "MESH");
                 if (!inspectText(fromId, "MESH", e.text)) Alerts.message(this, displayName(fromId), e.text, !broadcast);

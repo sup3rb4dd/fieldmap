@@ -57,7 +57,8 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
                         + (hasGrid ? "\n  ⌖ TAP FOR MAP" : ""));
                 boolean sos = Tac.isSos(m.text);
                 int color = sos ? Color.parseColor("#FFFF3B30") : m.out ? Color.parseColor("#FF39FF14")
-                        : via.contains("MESH") ? Color.parseColor("#FF00E5FF") : Color.parseColor("#FFA8FFA0");
+                        : via.contains("MESH") ? Color.parseColor("#FF00E5FF")
+                        : via.contains("TAK") ? Color.parseColor("#FF7FB2FF") : Color.parseColor("#FFA8FFA0");
                 tv.setTextColor(color);
                 tv.setTypeface(android.graphics.Typeface.MONOSPACE);
                 tv.setTextSize(14);
@@ -112,6 +113,11 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
         String dest = to.getText().toString().trim();
         if (text.isEmpty()) return;
         if (dest.isEmpty()) dest = app.group();
+        if (dest.startsWith("tak:")) {
+            toast("Direct messages to TAK users aren't supported yet. Send to the team instead.");
+            to.setText(app.group());
+            return;
+        }
         if (dest.startsWith("!")) {
             if (!app.mesh.isConnected()) { toast("Meshtastic radio not connected"); return; }
         } else if (!dest.equalsIgnoreCase(app.group())) {
@@ -132,7 +138,8 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
         app.store.unread = 0;
         app.store.save();
         adapter.notifyDataSetChanged();
-        String links = (app.radio.isConnected() ? "APRS▲ " : "APRS· ") + (app.mesh.isConnected() ? "MESH▲" : "MESH·");
+        String links = (app.radio.isConnected() ? "APRS▲ " : "APRS· ") + (app.mesh.isConnected() ? "MESH▲" : "MESH·")
+                + (app.tak.getState() == RadioLink.State.OFF ? "" : app.tak.isConnected() ? " TAK▲" : " TAK·");
         header.setText("◆ NET: " + app.group() + "    OP: " + (app.hasCallsign() ? app.myCall() : "NO CALLSIGN")
                 + "\n■ LINKS: " + links);
     }

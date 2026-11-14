@@ -12,6 +12,12 @@ public final class Gpx {
 
     /** track points: {lat, lon, timeMs, elevationM or NaN}; waypoints: name + {lat, lon}. */
     public static String build(String name, List<double[]> track, List<String> wptNames, List<double[]> wpts) {
+        return build(name, track, wptNames, wpts, new java.util.ArrayList<String>(), new java.util.ArrayList<List<double[]>>());
+    }
+
+    /** Also writes routes (each a list of {lat, lon}). */
+    public static String build(String name, List<double[]> track, List<String> wptNames, List<double[]> wpts,
+                               List<String> rteNames, List<List<double[]>> rtes) {
         SimpleDateFormat iso = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
         iso.setTimeZone(TimeZone.getTimeZone("UTC"));
         StringBuilder sb = new StringBuilder(64 + track.size() * 90);
@@ -21,6 +27,12 @@ public final class Gpx {
             double[] w = wpts.get(i);
             sb.append(String.format(Locale.US, "  <wpt lat=\"%.6f\" lon=\"%.6f\"><name>%s</name></wpt>\n",
                     w[0], w[1], esc(wptNames.get(i))));
+        }
+        for (int i = 0; i < rtes.size(); i++) {
+            sb.append("  <rte><name>").append(esc(rteNames.get(i))).append("</name>\n");
+            for (double[] p : rtes.get(i))
+                sb.append(String.format(Locale.US, "    <rtept lat=\"%.6f\" lon=\"%.6f\"/>\n", p[0], p[1]));
+            sb.append("  </rte>\n");
         }
         if (!track.isEmpty()) {
             sb.append("  <trk><name>").append(esc(name)).append("</name><trkseg>\n");

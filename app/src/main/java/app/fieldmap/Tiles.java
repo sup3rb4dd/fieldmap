@@ -62,6 +62,32 @@ public final class Tiles {
     public static final String GEOPLATFORM_NAIP =
             "https://imagery.geoplatform.gov/iipp/rest/services/NAIP/NAIP_plus/ImageServer/exportImage";
 
+    public static final int CUSTOM = 5, MBTILES = 6;
+
+    /** Any map server that serves standard z/x/y tiles: https://host/path/{z}/{x}/{y}.png */
+    static class Custom extends OnlineTileSourceBase {
+        private final String template;
+
+        Custom(String template) {
+            super("Custom" + Integer.toHexString(template.hashCode()), 0, 19, 256, "", new String[]{template});
+            this.template = template;
+        }
+
+        @Override
+        public String getTileURLString(long index) {
+            return template.replace("{z}", String.valueOf(MapTileIndex.getZoom(index)))
+                    .replace("{x}", String.valueOf(MapTileIndex.getX(index)))
+                    .replace("{y}", String.valueOf(MapTileIndex.getY(index)));
+        }
+    }
+
+    public static ITileSource custom(String template) { return new Custom(template); }
+
+    public static boolean validTemplate(String t) {
+        return t != null && (t.startsWith("https://") || t.startsWith("http://"))
+                && t.contains("{z}") && t.contains("{x}") && t.contains("{y}");
+    }
+
     public static final String[] NAMES = {
             "USGS Topo (offline OK)",
             "USGS Satellite HD (offline OK)",
@@ -86,11 +112,12 @@ public final class Tiles {
             case 1: return 19;
             case 3: return 19;
             case 4: return 19;
+            case CUSTOM: return 19;
             default: return 16;
         }
     }
 
     public static boolean allowsDownload(int i) {
-        return i != 3;
+        return i != 3 && i != MBTILES;
     }
 }

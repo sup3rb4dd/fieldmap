@@ -77,9 +77,11 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private static final int REQ_LOCATION = 1, REQ_BT = 2, REQ_MESH = 3;
     private static final int REQ_BACKUP = 21, REQ_RESTORE = 22, REQ_GPX = 23;
+    static final int REQ_IMPORT = 24, REQ_MBTILES = 25;
 
-    private FieldMapApp app;
-    private MapView map;
+    FieldMapApp app;
+    MapView map;
+    MapTools tools;
     private MyLocationNewOverlay myLocOverlay;
     private Polyline rangeLine;
     private final List<Overlay> itemOverlays = new ArrayList<>();
@@ -87,7 +89,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private LinearLayout targetRow;
     private Button btnChat;
     private LocationManager lm;
-    private int layerIndex;
+    int layerIndex;
 
     private ScaleBarOverlay scale;
     private Polyline trailLine;
@@ -102,7 +104,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private boolean headingUp = false;
 
     // selected target: "pin:<id>" or "sta:<call>" or "pt:<lat>,<lon>"
-    private String target;
+    // routes being followed: "rte:<point index>:<shape id>"
+    String target;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -128,13 +131,15 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         targetRow = findViewById(R.id.targetRow);
         radioStatus = findViewById(R.id.radioStatus);
         btnChat = findViewById(R.id.btnChat);
+        tools = new MapTools(this, map);
 
         setupMap();
 
         findViewById(R.id.btnMe).setOnClickListener(v -> centerOnMe());
         findViewById(R.id.btnPin).setOnClickListener(v -> {
             IGeoPoint c = map.getMapCenter();
-            promptNewPin(c.getLatitude(), c.getLongitude());
+            if (tools.drawing) tools.addPoint(c.getLatitude(), c.getLongitude());
+            else promptNewPin(c.getLatitude(), c.getLongitude());
         });
         findViewById(R.id.btnGrid).setOnClickListener(v -> promptGoToGrid());
         findViewById(R.id.btnLayer).setOnClickListener(v -> chooseLayer());
@@ -154,6 +159,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         btnSos.setOnClickListener(v -> sosTapped());
         tvSos.setOnClickListener(v -> sosBannerTapped());
         tvWx.setOnClickListener(v -> showWeather(app.weather.top()));
+        tvTarget.setOnClickListener(v -> {
+            double[] t = targetPosition();
+            if (t != null) tools.terrainTo(t[0], t[1], targetName());
+        });
         compass = new Compass(this, this::onHeading);
         // keep the scale bar just under the top panel, however tall the banners make it
         findViewById(R.id.topBox).addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> {
@@ -224,7 +233,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void setupMap() {
         layerIndex = app.prefs.getInt("layer", 0);
-        map.setTileSource(Tiles.byIndex(layerIndex));
+        tools.applyLayer(layerIndex);
         map.setMultiTouchControls(true);
         map.getZoomController().setVisibility(CustomZoomButtonsController.Visibility.NEVER);
         applyDetail();
@@ -238,8 +247,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         map.getController().setCenter(new GeoPoint(lat, lon));
 
         MapEventsOverlay events = new MapEventsOverlay(new MapEventsReceiver() {
-            @Override public boolean singleTapConfirmedHelper(GeoPoint p) { return false; }
+            @Override public boolean singleTapConfirmedHelper(GeoPoint p) {
+                if (!tools.drawing) return false;
+                tools.addPoint(p.getLatitude(), p.getLongitude());
+                return true;
+            }
             @Override public boolean longPressHelper(GeoPoint p) {
+                if (tools.drawing) return false;
                 promptNewPin(p.getLatitude(), p.getLongitude());
                 return true;
             }
@@ -294,7 +308,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
      * Map sharpness. Scaling 256 px tiles up by the full screen density (3x on most phones)
      * makes everything blurry; a smaller factor loads the next zoom level's tiles instead.
      */
-    private void applyDetail() {
+    void applyDetail() {
         float density = getResources().getDisplayMetrics().density;
         int detail = app.prefs.getInt("detail", 1); // 0 sharp, 1 balanced, 2 large text
         float factor = detail == 0 ? 1f : detail == 2 ? density : Math.max(1f, density * 0.6f);
@@ -490,7 +504,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     // ---------- files: GPX export, backup, restore ----------
 
-    private void pickFile(String action, String mime, String name, int req) {
+    void pickFile(String action, String mime, String name, int req) {
         try {
             Intent i = new Intent(action).addCategory(Intent.CATEGORY_OPENABLE).setType(mime);
             if (name != null) i.putExtra(Intent.EXTRA_TITLE, name);
@@ -517,7 +531,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private static final List<String> BACKUP_SKIP = Arrays.asList(
             "mapLat", "mapLon", "mapZoom", "introShown", "askedNotif", "msgCounter",
-            "lastRadio", "lastMesh", "wantAprs", "wantMesh");
+            "lastRadio", "lastMesh", "wantAprs", "wantMesh", "takUid", "layer");
 
     private String backupJson() throws Exception {
         org.json.JSONObject root = new org.json.JSONObject();
@@ -533,6 +547,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
         root.put("settings", st);
         root.put("pins", app.store.exportMyPins());
+        root.put("shapes", app.store.exportMyShapes());
         return root.toString(2);
     }
 
@@ -557,9 +572,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         }
                         ed.apply();
                     }
-                    int got = app.store.importPins(pins);
-                    toast("Restored " + got + " places and waypoints" + (which == 1 ? " plus settings" : ""));
+                    int got = app.store.importPins(pins) + app.store.importShapes(root.optJSONArray("shapes"));
+                    toast("Restored " + got + " places, waypoints and drawings" + (which == 1 ? " plus settings" : ""));
                     applyDetail();
+                    app.applyTakSettings();
                     app.updateService();
                     refreshMarkers();
                 })
@@ -571,11 +587,20 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         List<String> names = new ArrayList<>();
         List<double[]> wpts = new ArrayList<>();
         for (Store.Pin p : app.store.pins.values()) {
-            if (!p.isMine()) continue;
+            if (!p.isMine() || !p.src.isEmpty()) continue;
             names.add(p.name);
             wpts.add(new double[]{p.lat, p.lon});
         }
-        return Gpx.build("FieldMap trail", app.trail.copy(), names, wpts);
+        List<String> rteNames = new ArrayList<>();
+        List<List<double[]>> rtes = new ArrayList<>();
+        for (Store.Shape sh : app.store.shapes.values()) {
+            if (!sh.isMine() || !sh.src.isEmpty()) continue;
+            List<double[]> pts = new ArrayList<>(sh.pts);
+            if (sh.closed && !pts.isEmpty()) pts.add(pts.get(0));
+            rteNames.add(sh.name);
+            rtes.add(pts);
+        }
+        return Gpx.build("FieldMap trail", app.trail.copy(), names, wpts, rteNames, rtes);
     }
 
     private void writeText(android.net.Uri uri, String text) throws Exception {
@@ -615,6 +640,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             if (requestCode == REQ_GPX) { writeText(data.getData(), gpxText()); toast("Trail saved"); }
             else if (requestCode == REQ_BACKUP) { writeText(data.getData(), backupJson()); toast("Backup saved"); }
             else if (requestCode == REQ_RESTORE) restoreFrom(readText(data.getData()));
+            else if (requestCode == REQ_IMPORT) tools.importFile(data.getData());
+            else if (requestCode == REQ_MBTILES) tools.copyMbtiles(data.getData());
         } catch (Exception e) {
             toast("File problem: " + e.getMessage());
         }
@@ -742,7 +769,11 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     pg.getOutlinePaint().setColor(a.color());
                     pg.getOutlinePaint().setStrokeWidth(2.5f * dd);
                     pg.setInfoWindow(null);
-                    pg.setOnClickListener((polygon, mapView, pos) -> { showWeather(a); return true; });
+                    pg.setOnClickListener((polygon, mapView, pos) -> {
+                        if (tools.drawing) return false;
+                        showWeather(a);
+                        return true;
+                    });
                     wxOverlays.add(pg);
                 }
             }
@@ -812,17 +843,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
     };
 
-    private void chooseLayer() {
-        new AlertDialog.Builder(this)
-                .setTitle("// SELECT LAYER")
-                .setSingleChoiceItems(Tiles.NAMES, layerIndex, (d, which) -> {
-                    layerIndex = which;
-                    app.prefs.edit().putInt("layer", which).apply();
-                    map.setTileSource(Tiles.byIndex(which));
-                    d.dismiss();
-                })
-                .show();
-    }
+    private void chooseLayer() { tools.chooseLayer(); }
 
     private void centerOnMe() {
         Location l = app.lastLoc;
@@ -836,7 +857,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void downloadArea() {
         if (!Tiles.allowsDownload(layerIndex)) {
-            toast("Switch to a USGS layer (Map button) to download for offline use");
+            toast(layerIndex == Tiles.MBTILES ? "This map is already an offline file" : "Switch to a USGS layer (LYR button) to download for offline use");
             return;
         }
         try {
@@ -858,7 +879,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     .setTitle("// CACHE AREA OFFLINE")
                     .setMessage("Save the visible area, zoom " + zMin + "–" + zMax + ".\n"
                             + count + " tiles, about " + size + " MB.\nKeep the app open until it finishes.")
-                    .setPositiveButton("Download", (d, w) -> cm.downloadAreaAsync(this, bb, zMin, zMax))
+                    .setPositiveButton("Download", (d, w) -> {
+                        cm.downloadAreaAsync(this, bb, zMin, zMax);
+                        // height data for the same area, so line of sight works offline too
+                        if (Elevation.tilesInBox(bb.getLatNorth(), bb.getLatSouth(), bb.getLonEast(), bb.getLonWest()) <= 400)
+                            app.elev.prefetch(bb.getLatNorth(), bb.getLatSouth(), bb.getLonEast(), bb.getLonWest(),
+                                    (ok, failed) -> app.log("Elevation saved for offline: " + ok + " tiles" + (failed > 0 ? ", " + failed + " failed" : "")));
+                    })
                     .setNegativeButton("Cancel", null)
                     .show();
         } catch (Exception e) {
@@ -868,7 +895,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     // ---------- markers ----------
 
-    private void refreshMarkers() {
+    void refreshMarkers() {
         map.getOverlays().removeAll(itemOverlays);
         itemOverlays.clear();
         long now = System.currentTimeMillis();
@@ -881,11 +908,15 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             int color = p.place ? Color.parseColor("#FFF2F2F2")
                     : p.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FFFF6EC7");
             String label = p.isMine() ? p.name : p.name + " (" + p.owner + ")";
+            if (!p.src.isEmpty()) color = Color.parseColor("#FFB0C4DE"); // imported
             m.setIcon(labelIcon(label, color, p.place ? 2 : 1));
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
             String key = "pin:" + p.id;
-            m.setOnMarkerClickListener((mk, mv) -> { pinTapped(p.id); return true; });
+            m.setOnMarkerClickListener((mk, mv) -> {
+                if (tools.drawing) tools.addPoint(p.lat, p.lon); else pinTapped(p.id);
+                return true;
+            });
             itemOverlays.add(m);
         }
         boolean trails = app.prefs.getBoolean("trails", true);
@@ -896,7 +927,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             boolean stale = now - s.time > 30 * 60 * 1000L;
             boolean sos = app.isSos(s.call);
             int color = sos ? Color.parseColor("#FFFF3B30") : stale ? Color.GRAY
-                    : "MESH".equals(s.via) ? Color.parseColor("#FF00E5FF") : Color.parseColor("#FF39FF14");
+                    : "MESH".equals(s.via) ? Color.parseColor("#FF00E5FF")
+                    : "TAK".equals(s.via) ? Color.parseColor("#FF7FB2FF") : Color.parseColor("#FF39FF14");
             if (trails && s.trail.size() > 1) {
                 Polyline tl = new Polyline();
                 List<GeoPoint> tp = new ArrayList<>();
@@ -910,10 +942,14 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             m.setIcon(labelIcon((sos ? "SOS " : "") + s.label(), color, 0));
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
-            m.setOnMarkerClickListener((mk, mv) -> { stationTapped(s.call); return true; });
+            m.setOnMarkerClickListener((mk, mv) -> {
+                if (tools.drawing) tools.addPoint(s.lat, s.lon); else stationTapped(s.call);
+                return true;
+            });
             itemOverlays.add(m);
         }
         map.getOverlays().addAll(insertAt, itemOverlays);
+        tools.syncShapes(trailLine);
         refreshTarget();
         map.invalidate();
     }
@@ -957,7 +993,20 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     /** Diamond (waypoint) or bracketed square (station) with a monospace tag under it. */
     /** shape: 0 = station square, 1 = waypoint diamond, 2 = saved place (house). */
+    private final java.util.Map<String, Drawable> iconCache = new java.util.HashMap<>();
+
+    /** Marker pictures are reused: a busy mesh redraws the map often, and making hundreds of bitmaps each time is slow. */
     private Drawable labelIcon(String label, int color, int shape) {
+        String key = shape + "|" + color + "|" + label;
+        Drawable cached = iconCache.get(key);
+        if (cached != null) return cached;
+        if (iconCache.size() > 600) iconCache.clear();
+        Drawable made = makeLabelIcon(label, color, shape);
+        iconCache.put(key, made);
+        return made;
+    }
+
+    private Drawable makeLabelIcon(String label, int color, int shape) {
         float d = getResources().getDisplayMetrics().density;
         label = label.toUpperCase(Locale.US);
         Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -1166,6 +1215,19 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .show();
     }
 
+    /** Following a route: once I reach a point, aim at the next one. */
+    private void advanceRoute() {
+        if (target == null || !target.startsWith("rte:")) return;
+        Location l = app.lastLoc;
+        String[] rp = target.split(":", 3);
+        Store.Shape s = rp.length < 3 ? null : app.store.shapes.get(rp[2]);
+        if (l == null || s == null) return;
+        int i = Integer.parseInt(rp[1]);
+        double reach = Math.max(25, l.hasAccuracy() ? l.getAccuracy() : 0);
+        while (i < s.pts.size() - 1 && Geo.distance(l.getLatitude(), l.getLongitude(), s.pts.get(i)[0], s.pts.get(i)[1]) < reach) i++;
+        target = "rte:" + i + ":" + rp[2];
+    }
+
     private String rangeFromMe(double lat, double lon) {
         Location l = app.lastLoc;
         if (l == null) return "Range: no GPS fix";
@@ -1186,6 +1248,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             String[] parts = target.substring(3).split(",", 3);
             return new double[]{Double.parseDouble(parts[0]), Double.parseDouble(parts[1])};
         }
+        if (target.startsWith("rte:")) {
+            String[] parts = target.split(":", 3);
+            Store.Shape s = parts.length < 3 ? null : app.store.shapes.get(parts[2]);
+            if (s == null) return null;
+            int i = Math.max(0, Math.min(s.pts.size() - 1, Integer.parseInt(parts[1])));
+            return s.pts.get(i);
+        }
         return null;
     }
 
@@ -1196,11 +1265,17 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             return p == null ? "" : p.name;
         }
         if (target.startsWith("sta:")) return app.displayName(target.substring(4));
+        if (target.startsWith("rte:")) {
+            String[] rp = target.split(":", 3);
+            Store.Shape s = rp.length < 3 ? null : app.store.shapes.get(rp[2]);
+            return s == null ? "" : s.name + " " + (Integer.parseInt(rp[1]) + 1) + "/" + s.pts.size();
+        }
         String[] parts = target.substring(3).split(",", 3);
         return parts.length > 2 && !parts[2].trim().isEmpty() ? parts[2].trim() : "Grid point";
     }
 
-    private void refreshTarget() {
+    void refreshTarget() {
+        advanceRoute();
         double[] t = targetPosition();
         if (t == null) {
             target = null;
@@ -1211,7 +1286,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
         if (targetRow.getVisibility() != android.view.View.VISIBLE) {
             targetRow.setVisibility(android.view.View.VISIBLE);
-            toastOnce("steer", "The arrow shows which way to walk. Hold the phone flat, top pointing ahead.");
+            toastOnce("steer", "The arrow shows which way to walk. Hold the phone flat, top pointing ahead. Tap the readout for line of sight.");
         }
         updateArrow();
         Location l = app.lastLoc;
@@ -1303,21 +1378,25 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     // ---------- menu ----------
 
     private void showMenu() {
-        final String RADIOS = "Radios (UV-PRO / Meshtastic)", CHK = "Check in: send OK + my grid",
-                POS = "Send my position now", DL = "Download this area for offline",
-                TRK = "My trail (export GPX / clear)", BAK = "Backup / restore places",
-                WX = "Weather alerts", CLR = "Clear heard stations", LOG = "Packet log",
-                DIAG = "Map diagnostics", SET = "Settings";
-        final String[] items = {RADIOS, CHK, POS, DL, TRK, BAK, WX, CLR, LOG, DIAG, SET};
+        final String RADIOS = "Radios and TAK link", CHK = "Check in: send OK + my grid",
+                POS = "Send my position now", DRAW = "Draw a route or area",
+                LOS = "Line of sight: me → crosshair", DL = "Download this area for offline",
+                FILES = "Files: import, trail, backup", WX = "Weather alerts", CLR = "Clear heard stations",
+                LOG = "Packet log", DIAG = "Map diagnostics", SET = "Settings";
+        final String[] items = {RADIOS, CHK, POS, DRAW, LOS, DL, FILES, WX, CLR, LOG, DIAG, SET};
         new AlertDialog.Builder(this)
                 .setItems(items, (d, which) -> {
                     String a = items[which];
                     if (a.equals(RADIOS)) radioTapped();
                     else if (a.equals(CHK)) { if (requireShare()) toast(app.checkIn() ? "Check-in sent" : "Send failed. See the packet log"); }
                     else if (a.equals(POS)) { if (requireShare()) toast(app.beaconNow() ? "Position sent" : "No GPS fix yet"); }
+                    else if (a.equals(DRAW)) tools.startDraw();
+                    else if (a.equals(LOS)) {
+                        IGeoPoint c = map.getMapCenter();
+                        tools.terrainTo(c.getLatitude(), c.getLongitude(), "Crosshair");
+                    }
                     else if (a.equals(DL)) downloadArea();
-                    else if (a.equals(TRK)) trailMenu();
-                    else if (a.equals(BAK)) backupMenu();
+                    else if (a.equals(FILES)) filesMenu();
                     else if (a.equals(WX)) weatherMenu();
                     else if (a.equals(CLR)) { app.store.clearStations(); app.sosFrom.clear(); refreshMarkers(); }
                     else if (a.equals(LOG)) startActivity(new Intent(this, LogActivity.class));
@@ -1327,8 +1406,25 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .show();
     }
 
+    private void filesMenu() {
+        final String IMP = "Import a KML, KMZ or GPX file…", IMPS = "Imported files (remove)",
+                TRK = "My trail: export GPX / clear", BAK = "Backup / restore places and drawings";
+        final String[] items = {IMP, IMPS, TRK, BAK};
+        new AlertDialog.Builder(this)
+                .setTitle("// FILES")
+                .setItems(items, (d, which) -> {
+                    String a = items[which];
+                    if (a.equals(IMP)) pickFile(Intent.ACTION_OPEN_DOCUMENT, "*/*", null, REQ_IMPORT);
+                    else if (a.equals(IMPS)) tools.importedMenu();
+                    else if (a.equals(TRK)) trailMenu();
+                    else if (a.equals(BAK)) backupMenu();
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
     private boolean requireShare() {
-        if (app.mesh.isConnected()) return true;
+        if (app.mesh.isConnected() || app.tak.isConnected()) return true;
         if (app.canTransmit() && !app.aprsTeam()) {
             new AlertDialog.Builder(this)
                     .setTitle("// APRS IS PUBLIC")
@@ -1340,7 +1436,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
         if (app.canShare()) return true;
         if (!app.radio.isConnected()) {
-            toast("Connect the UV-PRO or Meshtastic radio first (tap RADIO)");
+            toast("Connect a radio or the TAK link first (tap the COMMS line)");
             return false;
         }
         if (!app.hasCallsign()) {
@@ -1365,10 +1461,14 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 + (app.radio.isConnected() ? " · " + app.radio.deviceName() : "");
         String mesh = "Meshtastic: " + stateWord(app.mesh.getState())
                 + (app.mesh.isConnected() ? " · " + app.mesh.deviceName() : "");
+        String tak = "TAK link (ATAK users): " + (app.tak.getState() == RadioLink.State.OFF ? "off — set up in Settings"
+                : app.tak.describe().trim() + " · RX " + app.tak.rxCount);
         new AlertDialog.Builder(this)
                 .setTitle("// COMMS")
-                .setItems(new String[]{aprs, mesh}, (d, which) -> {
-                    if (which == 0) aprsTapped(); else meshTapped();
+                .setItems(new String[]{aprs, mesh, tak}, (d, which) -> {
+                    if (which == 0) aprsTapped();
+                    else if (which == 1) meshTapped();
+                    else startActivity(new Intent(this, SettingsActivity.class));
                 })
                 .setNegativeButton("Close", null)
                 .show();
@@ -1554,41 +1654,27 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 + "\nBeacon: " + (app.beaconSeconds() == 0 ? "off" : "every " + app.beaconSeconds() / 60 + " min");
     }
 
+    private static String linkMark(RadioLink.State s) {
+        return s == RadioLink.State.CONNECTED ? "▲" : "…";
+    }
+
     private void updateRadioStatus() {
-        RadioLink.State s = app.radio.getState();
-        RadioLink.State ms = app.mesh.getState();
-        if (ms != RadioLink.State.OFF) {
-            String a = s == RadioLink.State.CONNECTED ? "APRS▲" : s == RadioLink.State.OFF ? "APRS·" : "APRS…";
-            String m = ms == RadioLink.State.CONNECTED ? "MESH▲" : "MESH…";
-            radioStatus.setText("■ " + a + " " + m + "  RX" + (app.radio.rxCount + app.mesh.rxCount));
-            boolean anyOn = s == RadioLink.State.CONNECTED || ms == RadioLink.State.CONNECTED;
+        RadioLink.State s = app.radio.getState(), ms = app.mesh.getState(), ts = app.tak.getState();
+        StringBuilder sb = new StringBuilder("■");
+        boolean anyOn = false, anyWanted = false;
+        if (s != RadioLink.State.OFF) { sb.append(" APRS").append(linkMark(s)); anyWanted = true; anyOn |= s == RadioLink.State.CONNECTED; }
+        if (ms != RadioLink.State.OFF) { sb.append(" MESH").append(linkMark(ms)); anyWanted = true; anyOn |= ms == RadioLink.State.CONNECTED; }
+        if (ts != RadioLink.State.OFF) { sb.append(" TAK").append(linkMark(ts)); anyWanted = true; anyOn |= ts == RadioLink.State.CONNECTED; }
+        if (!anyWanted) {
+            radioStatus.setText("■ COMMS: OFFLINE");
+            radioStatus.setTextColor(ContextCompat.getColor(this, R.color.dim));
+        } else {
+            sb.append("  RX").append(app.radio.rxCount + app.mesh.rxCount + app.tak.rxCount);
+            if (s == RadioLink.State.CONNECTED && !app.hasCallsign() && ms == RadioLink.State.OFF && ts == RadioLink.State.OFF)
+                sb.append(" RX-ONLY");
+            radioStatus.setText(sb.toString());
             radioStatus.setTextColor(ContextCompat.getColor(this, anyOn ? R.color.accent : R.color.warn));
-            int unread = app.store.unread;
-            btnChat.setText(unread > 0 ? "MSG·" + unread : "MSG");
-            return;
         }
-        String txt;
-        int color;
-        switch (s) {
-            case CONNECTED:
-                txt = "■ APRS▲  RX" + app.radio.rxCount + " TX" + app.radio.txCount
-                        + (app.hasCallsign() ? "" : " RX-ONLY");
-                color = ContextCompat.getColor(this, R.color.accent);
-                break;
-            case CONNECTING:
-                txt = "■ COMMS: LINKING…";
-                color = ContextCompat.getColor(this, R.color.warn);
-                break;
-            case RETRYING:
-                txt = "■ COMMS: RE-LINK…";
-                color = ContextCompat.getColor(this, R.color.bad);
-                break;
-            default:
-                txt = "■ COMMS: OFFLINE";
-                color = ContextCompat.getColor(this, R.color.dim);
-        }
-        radioStatus.setText(txt);
-        radioStatus.setTextColor(color);
         int unread = app.store.unread;
         btnChat.setText(unread > 0 ? "MSG·" + unread : "MSG");
     }
@@ -1642,9 +1728,27 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         refreshTarget();
     }
 
+    private final Runnable elevRequest = new Runnable() {
+        @Override public void run() {
+            IGeoPoint c = map.getMapCenter();
+            app.elev.request(c.getLatitude(), c.getLongitude(), MainActivity.this::updateCenterText);
+        }
+    };
+
     private void updateCenterText() {
         IGeoPoint c = map.getMapCenter();
         String s = Mgrs.format(c.getLatitude(), c.getLongitude());
+        if (app.prefs.getBoolean("elevation", true) && map.getZoomLevelDouble() >= 9) {
+            Float h = app.elev.cached(c.getLatitude(), c.getLongitude());
+            if (h != null) {
+                s += app.imperial() ? String.format(Locale.US, "  ELV %,d FT", Math.round(h * 3.28084))
+                        : String.format(Locale.US, "  ELV %,d M", Math.round(h));
+            } else {
+                // wait until the map stops moving before fetching height data
+                clockHandler.removeCallbacks(elevRequest);
+                clockHandler.postDelayed(elevRequest, 700);
+            }
+        }
         Location l = app.lastLoc;
         if (l != null) {
             double dist = Geo.distance(l.getLatitude(), l.getLongitude(), c.getLatitude(), c.getLongitude());
@@ -1725,9 +1829,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     @Override public void onDataChanged() { refreshMarkers(); updateRadioStatus(); drawWeather(); updateBanners(); }
     @Override public void onRadioChanged() { updateRadioStatus(); }
 
-    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
+    void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
 
-    private void toastOnce(String key, String s) {
+    void toastOnce(String key, String s) {
         if (app.prefs.getBoolean("hint_" + key, false)) return;
         app.prefs.edit().putBoolean("hint_" + key, true).apply();
         toast(s);

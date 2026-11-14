@@ -53,6 +53,15 @@ public class SettingsActivity extends AppCompatActivity {
         CheckBox alertSos = findViewById(R.id.setAlertSos);
         CheckBox weather = findViewById(R.id.setWeather);
         CheckBox trails = findViewById(R.id.setTrails);
+        CheckBox elevation = findViewById(R.id.setElevation);
+        CheckBox takLan = findViewById(R.id.setTakLan);
+        EditText takServer = findViewById(R.id.setTakServer);
+        EditText takCall = findViewById(R.id.setTakCall);
+        elevation.setChecked(app.prefs.getBoolean("elevation", true));
+        takLan.setChecked(app.prefs.getBoolean("takLan", false));
+        takServer.setText(app.prefs.getString("takServer", ""));
+        takCall.setText(app.prefs.getString("takCall", ""));
+        takCall.setHint(app.myName());
         autoConnect.setChecked(app.prefs.getBoolean("autoConnect", true));
         alertSos.setChecked(app.prefs.getBoolean("alertSos", true));
         weather.setChecked(app.prefs.getBoolean("weather", true));
@@ -129,8 +138,13 @@ public class SettingsActivity extends AppCompatActivity {
                     .putBoolean("alertSos", alertSos.isChecked())
                     .putBoolean("weather", weather.isChecked())
                     .putBoolean("trails", trails.isChecked())
+                    .putBoolean("elevation", elevation.isChecked())
+                    .putBoolean("takLan", takLan.isChecked())
+                    .putString("takServer", takServer.getText().toString().trim())
+                    .putString("takCall", takCall.getText().toString().trim())
                     .putInt("overdueMin", OVERDUE_MIN[Math.max(0, overdueMin.getSelectedItemPosition())])
                     .apply();
+            app.applyTakSettings();
             app.updateService();
             Toast.makeText(this, "CONFIG COMMITTED", Toast.LENGTH_SHORT).show();
             finish();

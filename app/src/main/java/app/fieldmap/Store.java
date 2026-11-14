@@ -26,6 +26,20 @@ public class Store {
         public boolean shared;     // I have sent it over the radio
         public int meshId;         // Meshtastic waypoint id for my pins (0 = not assigned yet)
         public boolean place;      // saved place (home, family): local only, never transmitted
+        public String src = "";    // file this was imported from, "" otherwise
+
+        public boolean isMine() { return owner == null || owner.isEmpty(); }
+    }
+
+    /** A drawn, received or imported route (open line) or area (closed). */
+    public static class Shape {
+        public String id, name = "";
+        public boolean closed;
+        public List<double[]> pts = new ArrayList<>();
+        public String owner = "";  // "" = mine
+        public String src = "";    // import file name, "" otherwise
+        public boolean shared;
+        public long time;
 
         public boolean isMine() { return owner == null || owner.isEmpty(); }
     }
@@ -55,6 +69,9 @@ public class Store {
     public final Map<String, Pin> pins = new LinkedHashMap<>();
     public final Map<String, Station> stations = new LinkedHashMap<>();
     public final List<Msg> messages = new ArrayList<>();
+    public final Map<String, Shape> shapes = new LinkedHashMap<>();
+    /** Bumped whenever shapes change, so the map only redraws them when needed. */
+    public int shapesRev = 0;
     public int unread = 0;
 
     private final SharedPreferences sp;
@@ -94,6 +111,113 @@ public class Store {
         p.comment = comment == null ? "" : comment;
         p.time = System.currentTimeMillis();
         save();
+    }
+
+    public Shape addMyShape(String name, boolean closed, List<double[]> pts, String src) {
+        Shape s = new Shape();
+        s.id = UUID.randomUUID().toString();
+        s.name = name;
+        s.closed = closed;
+        s.pts = new ArrayList<>(pts);
+        s.src = src == null ? "" : src;
+        s.time = System.currentTimeMillis();
+        shapes.put(s.id, s);
+        shapesRev++;
+        save();
+        return s;
+    }
+
+    public void upsertRemoteShape(String id, String owner, String name, boolean closed, List<double[]> pts) {
+        Shape s = shapes.get(id);
+        if (s == null) {
+            s = new Shape();
+            s.id = id;
+            shapes.put(id, s);
+        }
+        s.owner = owner == null || owner.isEmpty() ? "?" : owner;
+        s.name = name;
+        s.closed = closed;
+        s.pts = new ArrayList<>(pts);
+        s.time = System.currentTimeMillis();
+        shapesRev++;
+        save();
+    }
+
+    public void removeShape(String id) {
+        if (shapes.remove(id) != null) { shapesRev++; save(); }
+    }
+
+    public void touchShapes() { shapesRev++; save(); }
+
+    /** Names of the files things were imported from. */
+    public java.util.Set<String> importSources() {
+        java.util.Set<String> out = new java.util.TreeSet<>();
+        for (Pin p : pins.values()) if (p.src != null && !p.src.isEmpty()) out.add(p.src);
+        for (Shape s : shapes.values()) if (s.src != null && !s.src.isEmpty()) out.add(s.src);
+        return out;
+    }
+
+    /** Removes everything that came from one imported file. Returns how many items went. */
+    public int removeImport(String src) {
+        int n = 0;
+        for (Iterator<Pin> it = pins.values().iterator(); it.hasNext(); ) if (src.equals(it.next().src)) { it.remove(); n++; }
+        for (Iterator<Shape> it = shapes.values().iterator(); it.hasNext(); ) if (src.equals(it.next().src)) { it.remove(); n++; }
+        shapesRev++;
+        save();
+        return n;
+    }
+
+    public Pin addImportedPin(String name, double lat, double lon, String src) {
+        Pin p = new Pin();
+        p.id = UUID.randomUUID().toString();
+        p.name = name;
+        p.lat = lat;
+        p.lon = lon;
+        p.src = src;
+        p.time = System.currentTimeMillis();
+        pins.put(p.id, p);
+        save();
+        return p;
+    }
+
+    private static JSONObject shapeJson(Shape s) throws org.json.JSONException {
+        JSONObject o = new JSONObject();
+        o.put("id", s.id); o.put("name", s.name); o.put("closed", s.closed);
+        o.put("poly", app.fieldmap.core.Shapes.encode(s.pts));
+        o.put("owner", s.owner); o.put("src", s.src); o.put("shared", s.shared); o.put("time", s.time);
+        return o;
+    }
+
+    private static Shape shapeFrom(JSONObject o) throws org.json.JSONException {
+        Shape s = new Shape();
+        s.id = o.getString("id"); s.name = o.optString("name"); s.closed = o.optBoolean("closed");
+        List<double[]> pts = app.fieldmap.core.Shapes.decode(o.optString("poly"));
+        if (pts == null || pts.size() < 2) throw new org.json.JSONException("bad shape");
+        s.pts = pts;
+        s.owner = o.optString("owner"); s.src = o.optString("src"); s.shared = o.optBoolean("shared"); s.time = o.optLong("time");
+        return s;
+    }
+
+    public JSONArray exportMyShapes() throws org.json.JSONException {
+        JSONArray out = new JSONArray();
+        for (Shape s : shapes.values()) if (s.isMine()) out.put(shapeJson(s));
+        return out;
+    }
+
+    public int importShapes(JSONArray arr) {
+        int n = 0;
+        for (int i = 0; arr != null && i < arr.length(); i++) {
+            try {
+                Shape s = shapeFrom(arr.getJSONObject(i));
+                s.owner = "";
+                s.shared = false;
+                shapes.put(s.id, s);
+                n++;
+            } catch (Exception ignored) {
+            }
+        }
+        if (n > 0) { shapesRev++; save(); }
+        return n;
     }
 
     public void removePin(String id) {
@@ -203,7 +327,7 @@ public class Store {
         JSONObject o = new JSONObject();
         o.put("id", p.id); o.put("name", p.name); o.put("lat", p.lat); o.put("lon", p.lon);
         o.put("owner", p.owner); o.put("comment", p.comment); o.put("time", p.time); o.put("shared", p.shared);
-        o.put("meshId", p.meshId); o.put("place", p.place);
+        o.put("meshId", p.meshId); o.put("place", p.place); o.put("src", p.src);
         return o;
     }
 
@@ -214,6 +338,7 @@ public class Store {
         p.shared = o.optBoolean("shared");
         p.meshId = o.optInt("meshId");
         p.place = o.optBoolean("place");
+        p.src = o.optString("src");
         return p;
     }
 
@@ -265,7 +390,9 @@ public class Store {
                 o.put("time", m.time); o.put("out", m.out); o.put("acked", m.acked); o.put("via", m.via);
                 jm.put(o);
             }
-            sp.edit().putString("pins", jp.toString()).putString("stations", js.toString())
+            JSONArray jsh = new JSONArray();
+            for (Shape s : shapes.values()) jsh.put(shapeJson(s));
+            sp.edit().putString("pins", jp.toString()).putString("stations", js.toString()).putString("shapes", jsh.toString())
                     .putString("messages", jm.toString()).putInt("unread", unread).apply();
         } catch (Exception ignored) {
         }
@@ -304,6 +431,14 @@ public class Store {
                 messages.add(m);
             }
             unread = sp.getInt("unread", 0);
+            JSONArray jsh = new JSONArray(sp.getString("shapes", "[]"));
+            for (int i = 0; i < jsh.length(); i++) {
+                try {
+                    Shape s = shapeFrom(jsh.getJSONObject(i));
+                    shapes.put(s.id, s);
+                } catch (Exception ignored) {
+                }
+            }
         } catch (Exception ignored) {
         }
     }
