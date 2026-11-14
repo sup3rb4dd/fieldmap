@@ -3,53 +3,135 @@
         <item name="colorPrimary">@color/bg</item>
         <item name="colorPrimaryDark">@color/bg</item>
         <item name="colorAccent">@color/accent</item>
+        <item name="colorControlNormal">@color/dim</item>
+        <item name="colorControlActivated">@color/accent</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
-        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorPrimary">@color/accent</item>
         <item name="android:textColorSecondary">@color/dim</item>
-        <item name="alertDialogTheme">@style/Theme.FieldMap.Dialog</item>
-    </style>
-    <style name="Theme.FieldMap.Dialog" parent="Theme.AppCompat.Dialog.Alert">
-        <item name="colorAccent">@color/accent</item>
-    </style>
-    <style name="BarButton" parent="Widget.AppCompat.Button.Borderless">
         <item name="android:textColor">@color/text</item>
-        <item name="android:textSize">13sp</item>
+        <item name="android:textColorHint">@color/dim</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="fontFamily">monospace</item>
+        <item name="alertDialogTheme">@style/Theme.FieldMap.Dialog</item>
+        <item name="android:spinnerItemStyle">@style/HudSpinnerItem</item>
+    </style>
+
+    <style name="Theme.FieldMap.Dialog" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/hud_panel</item>
+        <item name="android:background">@color/panel_solid</item>
+        <item name="colorAccent">@color/accent</item>
+        <item name="colorControlNormal">@color/dim</item>
+        <item name="android:textColorPrimary">@color/accent</item>
+        <item name="android:textColorSecondary">@color/text</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textColorAlertDialogListItem">@color/accent</item>
+        <item name="android:textColorHint">@color/dim</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="fontFamily">monospace</item>
+        <item name="buttonBarButtonStyle">@style/HudDialogButton</item>
+    </style>
+
+    <style name="HudDialogButton" parent="Widget.AppCompat.Button.ButtonBar.AlertDialog">
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="HudSpinnerItem" parent="Widget.AppCompat.TextView.SpinnerItem">
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <!-- small square text buttons in the top bar -->
+    <style name="BarButton" parent="Widget.AppCompat.Button.Borderless">
+        <item name="android:background">@drawable/hud_button_flat</item>
+        <item name="android:textColor">@color/hud_btn_text</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0.1</item>
         <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">34dp</item>
         <item name="android:paddingStart">10dp</item>
         <item name="android:paddingEnd">10dp</item>
+        <item name="android:layout_marginStart">6dp</item>
         <item name="android:textAllCaps">true</item>
+        <item name="android:stateListAnimator">@null</item>
     </style>
+
+    <!-- square tool buttons down the right edge -->
     <style name="RoundButton" parent="Widget.AppCompat.Button">
-        <item name="android:background">@drawable/round_btn</item>
-        <item name="android:textColor">@color/text</item>
-        <item name="android:textSize">12sp</item>
+        <item name="android:background">@drawable/hud_button</item>
+        <item name="android:textColor">@color/hud_btn_text</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0.08</item>
         <item name="android:minWidth">0dp</item>
         <item name="android:minHeight">0dp</item>
-        <item name="android:layout_width">52dp</item>
-        <item name="android:layout_height">52dp</item>
-        <item name="android:layout_margin">5dp</item>
+        <item name="android:layout_width">54dp</item>
+        <item name="android:layout_height">46dp</item>
+        <item name="android:layout_margin">4dp</item>
         <item name="android:textAllCaps">true</item>
         <item name="android:padding">0dp</item>
+        <item name="android:stateListAnimator">@null</item>
     </style>
+
+    <style name="HudLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">@color/dim</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0.15</item>
+    </style>
+
     <style name="SettingsLabel">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">14dp</item>
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">4dp</item>
         <item name="android:textColor">@color/dim</item>
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textAllCaps">true</item>
     </style>
     <style name="SettingsHeader">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textColor">@color/accent</item>
         <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0.12</item>
     </style>
     <style name="SettingsField">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textColor">@color/text</item>
+        <item name="android:background">@drawable/hud_field</item>
+        <item name="android:textColor">@color/accent</item>
         <item name="android:textColorHint">@color/dim</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+    <style name="HudCheck">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:buttonTint">@color/accent</item>
+    </style>
+    <style name="HudBigButton" parent="Widget.AppCompat.Button">
+        <item name="android:background">@drawable/hud_button</item>
+        <item name="android:textColor">@color/hud_btn_text</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.15</item>
+        <item name="android:minHeight">52dp</item>
+        <item name="android:stateListAnimator">@null</item>
     </style>
 </resources>

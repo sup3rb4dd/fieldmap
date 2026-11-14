@@ -1,9 +1,12 @@
 <resources>
-    <color name="bg">#FF101410</color>
-    <color name="panel">#E6161C16</color>
-    <color name="accent">#FF7CFC00</color>
-    <color name="text">#FFE8F0E8</color>
-    <color name="dim">#FF9AA89A</color>
+    <color name="bg">#FF000000</color>
+    <color name="panel">#E6000000</color>
+    <color name="panel_solid">#FF020802</color>
+    <color name="accent">#FF39FF14</color>
+    <color name="text">#FFA8FFA0</color>
+    <color name="dim">#FF2E8B2E</color>
+    <color name="grid">#FF0E3A0E</color>
     <color name="warn">#FFFFB000</color>
-    <color name="bad">#FFFF5252</color>
+    <color name="bad">#FFFF3B30</color>
+    <color name="mesh">#FF00E5FF</color>
 </resources>

@@ -81,7 +81,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private MyLocationNewOverlay myLocOverlay;
     private Polyline rangeLine;
     private final List<Overlay> itemOverlays = new ArrayList<>();
-    private TextView tvMe, tvCenter, tvTarget, radioStatus;
+    private TextView tvMe, tvCenter, tvTarget, radioStatus, tvClock;
     private LinearLayout targetRow;
     private Button btnChat;
     private LocationManager lm;
@@ -125,6 +125,12 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         findViewById(R.id.btnGrid).setOnClickListener(v -> promptGoToGrid());
         findViewById(R.id.btnLayer).setOnClickListener(v -> chooseLayer());
         findViewById(R.id.btnNorth).setOnClickListener(v -> map.setMapOrientation(0));
+        tvClock = findViewById(R.id.tvClock);
+        findViewById(R.id.btnNvg).setOnClickListener(v -> {
+            app.prefs.edit().putBoolean("nvg", !app.prefs.getBoolean("nvg", false)).apply();
+            applyNvg();
+        });
+        applyNvg();
         findViewById(R.id.btnClearTarget).setOnClickListener(v -> { target = null; refreshTarget(); });
         btnChat.setOnClickListener(v -> startActivity(new Intent(this, ChatActivity.class)));
         findViewById(R.id.btnList).setOnClickListener(v -> showList());
@@ -139,7 +145,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         if (!app.hasCallsign() && !app.prefs.getBoolean("introShown", false)) {
             app.prefs.edit().putBoolean("introShown", true).apply();
             new AlertDialog.Builder(this)
-                    .setTitle("Welcome to FieldMap")
+                    .setTitle("◆ FIELDMAP // BRIEFING")
                     .setMessage("• Long-press the map to drop a pin.\n"
                             + "• Tap any pin or station to get range and bearing.\n"
                             + "• Use Map ▸ ☰ ▸ Download this area to save maps for offline use.\n\n"
@@ -187,16 +193,27 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         scale.setAlignBottom(false);
         scale.setScaleBarOffset(30, (int) (90 * getResources().getDisplayMetrics().density));
         scale.setUnitsOfMeasure(app.imperial() ? ScaleBarOverlay.UnitsOfMeasure.imperial : ScaleBarOverlay.UnitsOfMeasure.metric);
+        scale.getBarPaint().setColor(Color.parseColor("#FF39FF14"));
+        scale.getBarPaint().setStrokeWidth(3 * getResources().getDisplayMetrics().density);
+        scale.getTextPaint().setColor(Color.parseColor("#FF39FF14"));
+        scale.getTextPaint().setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD));
+        scale.getTextPaint().setShadowLayer(4, 0, 0, Color.BLACK);
         map.getOverlays().add(scale);
 
         rangeLine = new Polyline();
+        float dd = getResources().getDisplayMetrics().density;
         rangeLine.getOutlinePaint().setColor(Color.parseColor("#FFFFB000"));
-        rangeLine.getOutlinePaint().setStrokeWidth(5f);
+        rangeLine.getOutlinePaint().setStrokeWidth(2.5f * dd);
+        rangeLine.getOutlinePaint().setPathEffect(new android.graphics.DashPathEffect(new float[]{10 * dd, 6 * dd}, 0));
         rangeLine.setVisible(false);
         rangeLine.setInfoWindow(null);
         map.getOverlays().add(rangeLine);
 
         myLocOverlay = new MyLocationNewOverlay(new GpsMyLocationProvider(this), map);
+        Bitmap me = selfIcon(false), meMoving = selfIcon(true);
+        myLocOverlay.setDirectionArrow(me, meMoving);
+        myLocOverlay.setPersonAnchor(0.5f, 0.5f);
+        myLocOverlay.setDirectionAnchor(0.5f, 0.5f);
         map.getOverlays().add(myLocOverlay);
 
         map.addMapListener(new MapListener() {
@@ -231,7 +248,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .append(String.format(Locale.US, "\nZoom %.1f · detail %d · scale %.2f",
                         map.getZoomLevelDouble(), app.prefs.getInt("detail", 1), map.getTilesScaleFactor()));
         final AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("Map diagnostics")
+                .setTitle("// MAP DIAGNOSTICS")
                 .setMessage(sb + "\n\nTesting tile servers…")
                 .setPositiveButton("Close", null)
                 .show();
@@ -286,9 +303,48 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
     }
 
+    // ---------- tactical HUD helpers ----------
+
+    /** "RNG 1.24 MI · BRG 047° NE" */
+    private String rngBrg(double lat1, double lon1, double lat2, double lon2) {
+        double d = Geo.distance(lat1, lon1, lat2, lon2);
+        double b = Geo.bearing(lat1, lon1, lat2, lon2);
+        return String.format(Locale.US, "RNG %s · BRG %03.0f° %s",
+                Geo.formatDistance(d, app.imperial()).toUpperCase(Locale.US), b, Geo.cardinal(b));
+    }
+
+    private final android.os.Handler clockHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable clockTick = new Runnable() {
+        @Override public void run() {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("ddHHmm'Z' MMMyy", Locale.US);
+            f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            tvClock.setText(f.format(new java.util.Date()).toUpperCase(Locale.US));
+            clockHandler.postDelayed(this, 1000);
+        }
+    };
+
+    /** Night-vision look: map imagery turned to phosphor green. */
+    private void applyNvg() {
+        boolean on = app.prefs.getBoolean("nvg", false);
+        org.osmdroid.views.overlay.TilesOverlay tiles = map.getOverlayManager().getTilesOverlay();
+        if (on) {
+            android.graphics.ColorMatrix cm = new android.graphics.ColorMatrix(new float[]{
+                    0.05f, 0.10f, 0.02f, 0, 0,
+                    0.35f, 0.75f, 0.15f, 0, 10,
+                    0.05f, 0.10f, 0.02f, 0, 0,
+                    0, 0, 0, 1, 0});
+            tiles.setColorFilter(new android.graphics.ColorMatrixColorFilter(cm));
+        } else {
+            tiles.setColorFilter(null);
+        }
+        Button b = findViewById(R.id.btnNvg);
+        b.setText(on ? "NVG●" : "NVG");
+        map.invalidate();
+    }
+
     private void chooseLayer() {
         new AlertDialog.Builder(this)
-                .setTitle("Map layer")
+                .setTitle("// SELECT LAYER")
                 .setSingleChoiceItems(Tiles.NAMES, layerIndex, (d, which) -> {
                     layerIndex = which;
                     app.prefs.edit().putInt("layer", which).apply();
@@ -323,13 +379,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             String size = String.format(Locale.US, "%.0f", count * 0.025); // ~25 KB per tile
             if (count > 25000) {
                 new AlertDialog.Builder(this)
-                        .setTitle("Area too large")
+                        .setTitle("// AREA TOO LARGE")
                         .setMessage(count + " tiles. Zoom in closer and try again (limit 25,000).")
                         .setPositiveButton("OK", null).show();
                 return;
             }
             new AlertDialog.Builder(this)
-                    .setTitle("Download for offline")
+                    .setTitle("// CACHE AREA OFFLINE")
                     .setMessage("Save the visible area, zoom " + zMin + "–" + zMax + ".\n"
                             + count + " tiles, about " + size + " MB.\nKeep the app open until it finishes.")
                     .setPositiveButton("Download", (d, w) -> cm.downloadAreaAsync(this, bb, zMin, zMax))
@@ -352,7 +408,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         for (Store.Pin p : app.store.pins.values()) {
             Marker m = new Marker(map);
             m.setPosition(new GeoPoint(p.lat, p.lon));
-            int color = p.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FF40C4FF");
+            int color = p.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FFFF6EC7");
             String label = p.isMine() ? p.name : p.name + " (" + p.owner + ")";
             m.setIcon(labelIcon(label, color, true));
             m.setAnchor(0.5f, iconAnchorY);
@@ -366,7 +422,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             m.setPosition(new GeoPoint(s.lat, s.lon));
             boolean stale = now - s.time > 30 * 60 * 1000L;
             int color = stale ? Color.GRAY
-                    : "MESH".equals(s.via) ? Color.parseColor("#FFB388FF") : Color.parseColor("#FF7CFC00");
+                    : "MESH".equals(s.via) ? Color.parseColor("#FF00E5FF") : Color.parseColor("#FF39FF14");
             m.setIcon(labelIcon(s.label(), color, false));
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
@@ -380,12 +436,48 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private float iconAnchorY = 0.25f;
 
-    /** Dot or diamond with a text label under it. */
+    /** Own-position symbol: green ring with a center dot, or a chevron when moving. */
+    private Bitmap selfIcon(boolean moving) {
+        float d = getResources().getDisplayMetrics().density;
+        int size = (int) (36 * d);
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        float cx = size / 2f;
+        Paint black = new Paint(Paint.ANTI_ALIAS_FLAG);
+        black.setColor(Color.BLACK);
+        black.setStyle(Paint.Style.STROKE);
+        black.setStrokeWidth(5 * d);
+        Paint green = new Paint(Paint.ANTI_ALIAS_FLAG);
+        green.setColor(Color.parseColor("#FF39FF14"));
+        green.setStyle(Paint.Style.STROKE);
+        green.setStrokeWidth(2.5f * d);
+        if (moving) {
+            Path p = new Path();
+            p.moveTo(cx, 3 * d); p.lineTo(size - 7 * d, size - 6 * d); p.lineTo(cx, size - 13 * d); p.lineTo(7 * d, size - 6 * d); p.close();
+            c.drawPath(p, black);
+            Paint fill = new Paint(green); fill.setStyle(Paint.Style.FILL); fill.setAlpha(110);
+            c.drawPath(p, fill);
+            c.drawPath(p, green);
+        } else {
+            c.drawCircle(cx, cx, 11 * d, black);
+            c.drawCircle(cx, cx, 11 * d, green);
+            Paint dot = new Paint(green); dot.setStyle(Paint.Style.FILL);
+            c.drawCircle(cx, cx, 3.5f * d, dot);
+            c.drawLine(cx, 0, cx, 6 * d, green);
+            c.drawLine(cx, size - 6 * d, cx, size, green);
+            c.drawLine(0, cx, 6 * d, cx, green);
+            c.drawLine(size - 6 * d, cx, size, cx, green);
+        }
+        return bmp;
+    }
+
+    /** Diamond (waypoint) or bracketed square (station) with a monospace tag under it. */
     private Drawable labelIcon(String label, int color, boolean diamond) {
         float d = getResources().getDisplayMetrics().density;
+        label = label.toUpperCase(Locale.US);
         Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
-        text.setTextSize(12 * d);
-        text.setFakeBoldText(true);
+        text.setTextSize(11 * d);
+        text.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD));
         text.setTextAlign(Paint.Align.CENTER);
         float tw = text.measureText(label);
         int sym = (int) (18 * d);
@@ -408,15 +500,21 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             c.drawPath(path, fill);
             c.drawPath(path, edge);
         } else {
-            c.drawCircle(cx, cy, r * 0.8f, fill);
-            c.drawCircle(cx, cy, r * 0.8f, edge);
+            float h = r * 0.75f;
+            c.drawRect(cx - h, cy - h, cx + h, cy + h, edge);
+            Paint frame = new Paint(fill);
+            frame.setStyle(Paint.Style.STROKE);
+            frame.setStrokeWidth(2 * d);
+            c.drawRect(cx - h, cy - h, cx + h, cy + h, frame);
+            Paint core = new Paint(fill);
+            c.drawRect(cx - h * 0.35f, cy - h * 0.35f, cx + h * 0.35f, cy + h * 0.35f, core);
         }
         float ty = sym + 12 * d;
-        Paint halo = new Paint(text);
-        halo.setStyle(Paint.Style.STROKE);
-        halo.setStrokeWidth(4 * d);
-        halo.setColor(Color.BLACK);
-        c.drawText(label, cx, ty, halo);
+        // tag plate: black box with colored text
+        float tw2 = text.measureText(label) / 2 + 4 * d;
+        Paint plate = new Paint();
+        plate.setColor(Color.parseColor("#CC000000"));
+        c.drawRect(cx - tw2, ty - 11 * d, cx + tw2, ty + 3 * d, plate);
         text.setColor(color);
         c.drawText(label, cx, ty, text);
         return new BitmapDrawable(getResources(), bmp);
@@ -446,7 +544,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         box.addView(share);
 
         new AlertDialog.Builder(this)
-                .setTitle("Drop pin")
+                .setTitle("// MARK WAYPOINT")
                 .setView(box)
                 .setPositiveButton("Save", (d, w) -> {
                     String n = name.getText().toString().trim();
@@ -502,7 +600,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         EditText name = new EditText(this);
         name.setText(p.name);
         new AlertDialog.Builder(this)
-                .setTitle("Rename pin")
+                .setTitle("// RENAME WAYPOINT")
                 .setView(name)
                 .setPositiveButton("Save", (d, w) -> {
                     String n = name.getText().toString().trim();
@@ -588,11 +686,11 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         targetRow.setVisibility(android.view.View.VISIBLE);
         Location l = app.lastLoc;
         if (l != null) {
-            tvTarget.setText("▶ " + targetName() + "  " + Geo.rangeBearing(l.getLatitude(), l.getLongitude(), t[0], t[1], app.imperial()));
+            tvTarget.setText(targetName().toUpperCase(Locale.US) + "\n" + rngBrg(l.getLatitude(), l.getLongitude(), t[0], t[1]));
             rangeLine.setPoints(Arrays.asList(new GeoPoint(l.getLatitude(), l.getLongitude()), new GeoPoint(t[0], t[1])));
             rangeLine.setVisible(true);
         } else {
-            tvTarget.setText("▶ " + targetName() + "  (no GPS fix)");
+            tvTarget.setText(targetName().toUpperCase(Locale.US) + "\nNO GPS FIX");
             rangeLine.setVisible(false);
         }
         map.invalidate();
@@ -607,7 +705,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         if (cur.length() > 6) in.setText(cur.substring(0, 6));
         in.setSelection(in.getText().length());
         new AlertDialog.Builder(this)
-                .setTitle("Go to MGRS grid")
+                .setTitle("// GO TO GRID")
                 .setView(in)
                 .setPositiveButton("Go", (d, w) -> {
                     double[] ll = Mgrs.parse(in.getText().toString());
@@ -652,7 +750,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         String[] items = new String[order.length];
         for (int i = 0; i < order.length; i++) items[i] = labels.get(order[i]);
         new AlertDialog.Builder(this)
-                .setTitle("Team & pins (nearest first)")
+                .setTitle("// TRACKS & WAYPOINTS — NEAREST")
                 .setItems(items, (d, which) -> {
                     target = keys.get(order[which]);
                     double[] t = targetPosition();
@@ -697,7 +795,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
         if (!app.hasCallsign()) {
             new AlertDialog.Builder(this)
-                    .setTitle("Callsign needed")
+                    .setTitle("// CALLSIGN REQUIRED")
                     .setMessage("Sending over the radio needs your amateur callsign. Add it in Settings.")
                     .setPositiveButton("Settings", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
                     .setNegativeButton("Cancel", null).show();
@@ -718,7 +816,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         String mesh = "Meshtastic: " + stateWord(app.mesh.getState())
                 + (app.mesh.isConnected() ? " · " + app.mesh.deviceName() : "");
         new AlertDialog.Builder(this)
-                .setTitle("Radios")
+                .setTitle("// COMMS")
                 .setItems(new String[]{aprs, mesh}, (d, which) -> {
                     if (which == 0) aprsTapped(); else meshTapped();
                 })
@@ -746,7 +844,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private void aprsTapped() {
         if (app.radio.getState() != RadioLink.State.OFF) {
             new AlertDialog.Builder(this)
-                    .setTitle("UV-PRO (APRS)")
+                    .setTitle("// UV-PRO · APRS")
                     .setMessage(radioSummary())
                     .setPositiveButton("Disconnect", (d, w) -> app.radio.disconnect())
                     .setNegativeButton("Close", null).show();
@@ -768,7 +866,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         });
         if (devices.isEmpty()) {
             new AlertDialog.Builder(this)
-                    .setTitle("No paired radios")
+                    .setTitle("// NO PAIRED RADIOS")
                     .setMessage("On the UV-PRO: Menu ▸ General Settings ▸ KISS TNC ▸ On.\n"
                             + "Then pair it in Android Settings ▸ Bluetooth, and come back here.")
                     .setPositiveButton("Open Bluetooth settings", (d, w) ->
@@ -779,7 +877,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         String[] names = new String[devices.size()];
         for (int i = 0; i < names.length; i++) names[i] = safeName(devices.get(i)) + "\n" + devices.get(i).getAddress();
         new AlertDialog.Builder(this)
-                .setTitle("Connect to UV-PRO")
+                .setTitle("// LINK UV-PRO")
                 .setItems(names, (d, which) -> {
                     BluetoothDevice dev = devices.get(which);
                     app.prefs.edit().putString("lastRadio", dev.getAddress()).apply();
@@ -795,7 +893,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private void meshTapped() {
         if (app.mesh.getState() != RadioLink.State.OFF) {
             new AlertDialog.Builder(this)
-                    .setTitle("Meshtastic")
+                    .setTitle("// MESHTASTIC")
                     .setMessage("State: " + app.mesh.getState() + "\nDevice: " + app.mesh.deviceName()
                             + "\nMy node: " + (app.myNodeNum == 0 ? "?" : Mesh.nodeId(app.myNodeNum))
                             + "\nPackets received: " + app.mesh.rxCount + "\nPackets sent: " + app.mesh.txCount)
@@ -831,7 +929,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         BluetoothLeScanner scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) { toast("Bluetooth LE scanning isn't available"); return; }
         final AlertDialog searching = new AlertDialog.Builder(this)
-                .setTitle("Searching for Meshtastic radios…")
+                .setTitle("// SCANNING FOR MESH NODES…")
                 .setMessage("Make sure the Heltec is powered on and Bluetooth is enabled in its Meshtastic settings.")
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -859,7 +957,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             searching.dismiss();
             if (found.isEmpty()) {
                 new AlertDialog.Builder(this)
-                        .setTitle("No Meshtastic radio found")
+                        .setTitle("// NO MESH NODE FOUND")
                         .setMessage("Check that the radio is on and close the official Meshtastic app (only one app can connect at a time). Then try again.")
                         .setPositiveButton("OK", null).show();
                 return;
@@ -867,7 +965,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             String[] names = new String[found.size()];
             for (int i = 0; i < names.length; i++) names[i] = safeName(found.get(i)) + "\n" + found.get(i).getAddress();
             new AlertDialog.Builder(this)
-                    .setTitle("Connect to Meshtastic")
+                    .setTitle("// LINK MESH NODE")
                     .setItems(names, (d, which) -> {
                         app.mesh.connect(found.get(which));
                         toastOnce("meshPin", "If Android asks for a PIN, use the one shown on the Heltec's screen (default 123456)");
@@ -903,39 +1001,39 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         RadioLink.State s = app.radio.getState();
         RadioLink.State ms = app.mesh.getState();
         if (ms != RadioLink.State.OFF) {
-            String a = s == RadioLink.State.CONNECTED ? "APRS ✓" : s == RadioLink.State.OFF ? "APRS –" : "APRS …";
-            String m = ms == RadioLink.State.CONNECTED ? "MESH ✓" : "MESH …";
-            radioStatus.setText("● " + a + "  " + m + " · RX " + (app.radio.rxCount + app.mesh.rxCount));
+            String a = s == RadioLink.State.CONNECTED ? "APRS▲" : s == RadioLink.State.OFF ? "APRS·" : "APRS…";
+            String m = ms == RadioLink.State.CONNECTED ? "MESH▲" : "MESH…";
+            radioStatus.setText("■ " + a + " " + m + "  RX" + (app.radio.rxCount + app.mesh.rxCount));
             boolean anyOn = s == RadioLink.State.CONNECTED || ms == RadioLink.State.CONNECTED;
             radioStatus.setTextColor(ContextCompat.getColor(this, anyOn ? R.color.accent : R.color.warn));
             int unread = app.store.unread;
-            btnChat.setText(unread > 0 ? "Chat (" + unread + ")" : "Chat");
+            btnChat.setText(unread > 0 ? "MSG·" + unread : "MSG");
             return;
         }
         String txt;
         int color;
         switch (s) {
             case CONNECTED:
-                txt = "● RADIO ON · RX " + app.radio.rxCount + " · TX " + app.radio.txCount
-                        + (app.hasCallsign() ? "" : " · LISTEN ONLY");
+                txt = "■ APRS▲  RX" + app.radio.rxCount + " TX" + app.radio.txCount
+                        + (app.hasCallsign() ? "" : " RX-ONLY");
                 color = ContextCompat.getColor(this, R.color.accent);
                 break;
             case CONNECTING:
-                txt = "● RADIO: CONNECTING…";
+                txt = "■ COMMS: LINKING…";
                 color = ContextCompat.getColor(this, R.color.warn);
                 break;
             case RETRYING:
-                txt = "● RADIO: RECONNECTING…";
+                txt = "■ COMMS: RE-LINK…";
                 color = ContextCompat.getColor(this, R.color.bad);
                 break;
             default:
-                txt = "● RADIO: OFF (tap to connect)";
+                txt = "■ COMMS: OFFLINE";
                 color = ContextCompat.getColor(this, R.color.dim);
         }
         radioStatus.setText(txt);
         radioStatus.setTextColor(color);
         int unread = app.store.unread;
-        btnChat.setText(unread > 0 ? "Chat (" + unread + ")" : "Chat");
+        btnChat.setText(unread > 0 ? "MSG·" + unread : "MSG");
     }
 
     // ---------- location ----------
@@ -978,9 +1076,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 || LocationManager.GPS_PROVIDER.equals(loc.getProvider());
         if (!better) return;
         app.lastLoc = loc;
-        tvMe.setText("YOU  " + Mgrs.format(loc.getLatitude(), loc.getLongitude())
+        tvMe.setText(Mgrs.format(loc.getLatitude(), loc.getLongitude())
                 + (loc.hasAccuracy() ? String.format(Locale.US, "  ±%.0f%s",
-                app.imperial() ? loc.getAccuracy() * 3.28084 : loc.getAccuracy(), app.imperial() ? "ft" : "m") : ""));
+                app.imperial() ? loc.getAccuracy() * 3.28084 : loc.getAccuracy(), app.imperial() ? "FT" : "M") : ""));
         if (firstFix && !app.prefs.contains("mapLat")) {
             firstFix = false;
             map.getController().setZoom(15.0);
@@ -993,11 +1091,11 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     private void updateCenterText() {
         IGeoPoint c = map.getMapCenter();
-        String s = "CTR  " + Mgrs.format(c.getLatitude(), c.getLongitude());
+        String s = Mgrs.format(c.getLatitude(), c.getLongitude());
         Location l = app.lastLoc;
         if (l != null) {
             double dist = Geo.distance(l.getLatitude(), l.getLongitude(), c.getLatitude(), c.getLongitude());
-            if (dist > 5) s += "\n     " + Geo.rangeBearing(l.getLatitude(), l.getLongitude(), c.getLatitude(), c.getLongitude(), app.imperial());
+            if (dist > 5) s += "\n" + rngBrg(l.getLatitude(), l.getLongitude(), c.getLatitude(), c.getLongitude());
         }
         tvCenter.setText(s);
     }
@@ -1026,6 +1124,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         super.onResume();
         map.onResume();
         applyDetail();
+        clockHandler.removeCallbacks(clockTick);
+        clockHandler.post(clockTick);
         app.addListener(this);
         if (app.prefs.getBoolean("keepOn", false)) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -1038,6 +1138,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     protected void onPause() {
         super.onPause();
         map.onPause();
+        clockHandler.removeCallbacks(clockTick);
         app.removeListener(this);
         IGeoPoint c = map.getMapCenter();
         app.prefs.edit()

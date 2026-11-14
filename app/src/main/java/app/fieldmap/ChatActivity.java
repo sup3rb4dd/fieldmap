@@ -22,7 +22,8 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
     private ArrayAdapter<Store.Msg> adapter;
     private EditText to, input;
     private TextView header;
-    private final SimpleDateFormat fmt = new SimpleDateFormat("HH:mm", Locale.US);
+    private final SimpleDateFormat fmt = new SimpleDateFormat("ddHHmm'Z'", Locale.US);
+    { fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC")); }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -44,12 +45,17 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
                 Store.Msg m = getItem(position);
                 String time = fmt.format(new Date(m.time));
                 boolean team = m.to.equalsIgnoreCase(app.group());
-                String who = m.out ? "me → " + (team ? "team" : app.displayName(m.to))
-                        : app.displayName(m.from) + (team ? " → team" : " → me");
-                String status = m.out && m.id != null ? (m.acked ? "  ✓" : "  …") : "";
-                tv.setText(time + "  " + who + "  [" + (m.via == null ? "APRS" : m.via) + "]\n" + m.text + status);
-                tv.setTextColor(m.out ? Color.parseColor("#FF7CFC00") : Color.parseColor("#FFE8F0E8"));
-                tv.setTextSize(15);
+                String via = m.via == null ? "APRS" : m.via;
+                String who = m.out ? "SELF ▸ " + (team ? "NET" : app.displayName(m.to))
+                        : app.displayName(m.from) + " ▸ " + (team ? "NET" : "SELF");
+                String status = m.out && m.id != null ? (m.acked ? "  [ACK]" : "  [PEND]") : "";
+                tv.setText("[" + time + "] " + who.toUpperCase(Locale.US) + "  <" + via + ">\n> " + m.text + status);
+                int color = m.out ? Color.parseColor("#FF39FF14")
+                        : via.contains("MESH") ? Color.parseColor("#FF00E5FF") : Color.parseColor("#FFA8FFA0");
+                tv.setTextColor(color);
+                tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+                tv.setTextSize(14);
+                tv.setPadding(8, 14, 8, 14);
                 return tv;
             }
         };
@@ -85,9 +91,9 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
         app.store.unread = 0;
         app.store.save();
         adapter.notifyDataSetChanged();
-        String links = (app.radio.isConnected() ? "APRS " : "") + (app.mesh.isConnected() ? "MESH" : "");
-        header.setText("Team: " + app.group() + "   Me: " + (app.hasCallsign() ? app.myCall() : "(no callsign)")
-                + "\nLinks: " + (links.trim().isEmpty() ? "none connected" : links.trim()));
+        String links = (app.radio.isConnected() ? "APRS▲ " : "APRS· ") + (app.mesh.isConnected() ? "MESH▲" : "MESH·");
+        header.setText("◆ NET: " + app.group() + "    OP: " + (app.hasCallsign() ? app.myCall() : "NO CALLSIGN")
+                + "\n■ LINKS: " + links);
     }
 
     @Override protected void onResume() { super.onResume(); app.addListener(this); refresh(); }

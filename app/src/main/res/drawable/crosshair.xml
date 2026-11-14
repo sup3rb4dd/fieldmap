@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="36dp" android:height="36dp" android:viewportWidth="36" android:viewportHeight="36">
-    <path android:strokeColor="#FF000000" android:strokeWidth="3" android:pathData="M18,2 L18,13 M18,23 L18,34 M2,18 L13,18 M23,18 L34,18" />
-    <path android:strokeColor="#FF7CFC00" android:strokeWidth="1.5" android:pathData="M18,2 L18,13 M18,23 L18,34 M2,18 L13,18 M23,18 L34,18" />
+    android:width="72dp" android:height="72dp" android:viewportWidth="72" android:viewportHeight="72">
+    <!-- dark halo for contrast on bright imagery -->
+    <path android:strokeColor="#AA000000" android:strokeWidth="4" android:fillColor="#00000000"
+        android:pathData="M36,14 A22,22 0 1,1 35.99,14 Z" />
+    <path android:strokeColor="#AA000000" android:strokeWidth="4"
+        android:pathData="M36,2 L36,26 M36,46 L36,70 M2,36 L26,36 M46,36 L70,36" />
+    <!-- reticle -->
+    <path android:strokeColor="#FF39FF14" android:strokeWidth="1.5" android:fillColor="#00000000"
+        android:pathData="M36,14 A22,22 0 1,1 35.99,14 Z" />
+    <path android:strokeColor="#FF39FF14" android:strokeWidth="1.5"
+        android:pathData="M36,2 L36,26 M36,46 L36,70 M2,36 L26,36 M46,36 L70,36" />
+    <path android:strokeColor="#FF39FF14" android:strokeWidth="1"
+        android:pathData="M36,31 L36,33 M36,39 L36,41 M31,36 L33,36 M39,36 L41,36" />
+    <path android:fillColor="#FF39FF14" android:pathData="M35,35 L37,35 L37,37 L35,37 Z" />
 </vector>

@@ -10,7 +10,7 @@
         android:layout_height="wrap_content"
         android:fontFamily="monospace"
         android:padding="10dp"
-        android:textColor="@color/text"
+        android:textColor="@color/accent"
         android:textIsSelectable="true"
         android:textSize="11sp" />
 </ScrollView>
