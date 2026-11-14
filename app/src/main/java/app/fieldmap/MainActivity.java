@@ -102,6 +102,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         Configuration.getInstance().setOsmdroidTileCache(new java.io.File(base, "tiles"));
         Configuration.getInstance().setTileFileSystemCacheMaxBytes(3000L * 1024 * 1024);
         Configuration.getInstance().setTileFileSystemCacheTrimBytes(2800L * 1024 * 1024);
+        // HD imagery is rendered on demand by USGS and can be slow: fetch more tiles in parallel
+        Configuration.getInstance().setTileDownloadThreads((short) 8);
+        Configuration.getInstance().setTileDownloadMaxQueueSize((short) 80);
         setContentView(R.layout.activity_main);
 
         map = findViewById(R.id.map);
@@ -213,6 +216,74 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         float factor = detail == 0 ? 1f : detail == 2 ? density : Math.max(1f, density * 0.6f);
         map.setTilesScaleFactor(factor);
         map.setTilesScaledToDpi(false); // also re-applies the tile size
+    }
+
+    /** Fetches one normal and one HD tile at the map center and reports what the servers sent back. */
+    private void runMapDiagnostics() {
+        IGeoPoint c = map.getMapCenter();
+        double lat = c.getLatitude(), lon = c.getLongitude();
+        org.osmdroid.tileprovider.tilesource.ITileSource src = map.getTileProvider().getTileSource();
+        StringBuilder sb = new StringBuilder();
+        String version = "?";
+        try { version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        sb.append("App ").append(version).append("\nLayer: ").append(src.name())
+                .append(" (max ").append(src.getMaximumZoomLevel()).append(")")
+                .append(String.format(Locale.US, "\nZoom %.1f · detail %d · scale %.2f",
+                        map.getZoomLevelDouble(), app.prefs.getInt("detail", 1), map.getTilesScaleFactor()));
+        final AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("Map diagnostics")
+                .setMessage(sb + "\n\nTesting tile servers…")
+                .setPositiveButton("Close", null)
+                .show();
+        new Thread(() -> {
+            StringBuilder r = new StringBuilder(sb);
+            for (int z : new int[]{16, 18}) {
+                int n = 1 << z;
+                int x = (int) Math.floor((lon + 180) / 360 * n);
+                double latR = Math.toRadians(lat);
+                int y = (int) Math.floor((1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n);
+                long idx = org.osmdroid.util.MapTileIndex.getTileIndex(z, x, y);
+                String url = src instanceof org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+                        ? ((org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase) src).getTileURLString(idx) : "";
+                if (z > src.getMaximumZoomLevel()) {
+                    r.append("\n\nz").append(z).append(": layer stops at ").append(src.getMaximumZoomLevel());
+                    continue;
+                }
+                r.append("\n\nz").append(z).append(": ").append(probe(url));
+            }
+            app.log("Map diagnostics:\n" + r);
+            runOnUiThread(() -> { if (dlg.isShowing()) dlg.setMessage(r + "\n\n(Copied to Packet log)"); });
+        }).start();
+    }
+
+    private String probe(String url) {
+        long t0 = System.currentTimeMillis();
+        java.net.HttpURLConnection con = null;
+        try {
+            con = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            con.setConnectTimeout(15000);
+            con.setReadTimeout(30000);
+            con.setRequestProperty("User-Agent", Configuration.getInstance().getUserAgentValue());
+            int code = con.getResponseCode();
+            String type = con.getContentType();
+            java.io.InputStream in = code < 400 ? con.getInputStream() : con.getErrorStream();
+            byte[] buf = new byte[65536];
+            int total = 0, k;
+            StringBuilder head = new StringBuilder();
+            while (in != null && (k = in.read(buf)) > 0) {
+                if (total == 0 && type != null && !type.startsWith("image"))
+                    head.append(new String(buf, 0, Math.min(k, 200), "UTF-8"));
+                total += k;
+            }
+            long ms = System.currentTimeMillis() - t0;
+            String host = new java.net.URL(url).getHost();
+            return "HTTP " + code + " · " + type + " · " + total + " bytes · " + ms + " ms · " + host
+                    + (head.length() > 0 ? "\n" + head : "");
+        } catch (Exception e) {
+            return "FAILED after " + (System.currentTimeMillis() - t0) + " ms: " + e;
+        } finally {
+            if (con != null) con.disconnect();
+        }
     }
 
     private void chooseLayer() {
@@ -602,6 +673,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         items.add("Clear heard stations");
         items.add("Packet log");
         items.add("Settings");
+        items.add("Map diagnostics");
         new AlertDialog.Builder(this)
                 .setItems(items.toArray(new String[0]), (d, which) -> {
                     switch (which) {
@@ -611,6 +683,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         case 3: app.store.clearStations(); refreshMarkers(); break;
                         case 4: startActivity(new Intent(this, LogActivity.class)); break;
                         case 5: startActivity(new Intent(this, SettingsActivity.class)); break;
+                        case 6: runMapDiagnostics(); break;
                     }
                 })
                 .show();
