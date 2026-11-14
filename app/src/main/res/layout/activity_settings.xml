@@ -41,6 +41,36 @@
         <EditText android:id="@+id/setFilter" style="@style/SettingsField"
             android:hint="e.g. KF0ABC, KF0XYZ" android:inputType="textCapCharacters|textNoSuggestions" />
 
+        <TextView style="@style/SettingsHeader" android:layout_marginTop="28dp" android:text="◆ PRIVACY" />
+
+        <TextView style="@style/SettingsLabel" android:text="// Meshtastic team channel" />
+        <Spinner android:id="@+id/setMeshCh" android:layout_width="match_parent" android:layout_height="48dp" android:background="@drawable/hud_field" />
+        <CheckBox android:id="@+id/setTeamOnly" style="@style/HudCheck"
+            android:text="Only show mesh nodes &amp; waypoints from the team channel" />
+        <CheckBox android:id="@+id/setAprsTeam" style="@style/HudCheck"
+            android:text="Send team chat &amp; waypoints over APRS (PUBLIC)" />
+        <CheckBox android:id="@+id/setAprsPos" style="@style/HudCheck"
+            android:text="Send my position over APRS (PUBLIC)" />
+        <CheckBox android:id="@+id/setNogate" style="@style/HudCheck"
+            android:text="Keep my APRS packets off the internet (NOGATE)" />
+        <TextView
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp"
+            android:textColor="@color/dim" android:textSize="11sp"
+            android:text="Mesh traffic is encrypted with the team channel's key: only radios with that key can read it. APRS can't be encrypted (FCC rules) — anyone with a scanner can read it." />
+
+        <TextView style="@style/SettingsHeader" android:layout_marginTop="28dp" android:text="◆ BACKGROUND &amp; ALERTS" />
+        <CheckBox android:id="@+id/setBackground" style="@style/HudCheck"
+            android:text="Keep radios connected with the screen off" />
+        <CheckBox android:id="@+id/setAlertMsg" style="@style/HudCheck"
+            android:text="Alert on new messages" />
+        <CheckBox android:id="@+id/setAlertWpt" style="@style/HudCheck"
+            android:text="Alert on new shared waypoints" />
+        <CheckBox android:id="@+id/setAlertOverdue" style="@style/HudCheck"
+            android:text="Alert when a teammate stops reporting" />
+        <TextView style="@style/SettingsLabel" android:text="// Overdue after" />
+        <Spinner android:id="@+id/setOverdueMin" android:layout_width="match_parent" android:layout_height="48dp" android:background="@drawable/hud_field" />
+
+        <TextView style="@style/SettingsHeader" android:layout_marginTop="28dp" android:text="◆ DISPLAY" />
         <TextView style="@style/SettingsLabel" android:text="// Map detail" />
         <Spinner android:id="@+id/setDetail" android:layout_width="match_parent" android:layout_height="48dp" android:background="@drawable/hud_field" />
 

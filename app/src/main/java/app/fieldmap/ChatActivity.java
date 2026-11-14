@@ -80,7 +80,10 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
             if (!app.radio.isConnected()) { toast("UV-PRO not connected"); return; }
             if (!app.hasCallsign()) { toast("Set your callsign in Settings to send over APRS"); return; }
         } else if (!app.canShare()) {
-            toast(app.radio.isConnected() ? "Set your callsign in Settings to send over APRS" : "Connect a radio first");
+            if (app.canTransmit() && !app.aprsTeam())
+                toast("Team chat over APRS is off (APRS is public). Connect Meshtastic or allow it in Config ▸ Privacy");
+            else
+                toast(app.radio.isConnected() ? "Set your callsign in Settings to send over APRS" : "Connect a radio first");
             return;
         }
         if (app.sendMessage(dest, text)) input.setText("");
@@ -96,8 +99,14 @@ public class ChatActivity extends AppCompatActivity implements FieldMapApp.Liste
                 + "\n■ LINKS: " + links);
     }
 
-    @Override protected void onResume() { super.onResume(); app.addListener(this); refresh(); }
-    @Override protected void onPause() { super.onPause(); app.removeListener(this); }
+    @Override protected void onResume() {
+        super.onResume();
+        Alerts.chatVisible = true;
+        androidx.core.app.NotificationManagerCompat.from(this).cancel(10);
+        app.addListener(this);
+        refresh();
+    }
+    @Override protected void onPause() { super.onPause(); Alerts.chatVisible = false; app.removeListener(this); }
     @Override public void onDataChanged() { refresh(); }
     @Override public void onRadioChanged() { refresh(); }
 

@@ -47,6 +47,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     private final Map<Integer, String> nodeNames = new HashMap<>();
     private final Random rnd = new Random();
     private long lastMeshBeacon = 0;
+    public volatile boolean serviceRunning = false;
+    private final long sessionStart = System.currentTimeMillis();
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
@@ -64,6 +66,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         mesh = new MeshLink(this, this);
         msgCounter = prefs.getInt("msgCounter", 1);
         store.pruneStations(24 * 3600 * 1000L);
+        Alerts.createChannels(this);
+        main.postDelayed(overdueTask, 60_000);
     }
 
     // ---------- listeners ----------
@@ -89,6 +93,29 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public char symCode() { return prefs.getString("symCode", "[").charAt(0); }
     public String statusComment() { return prefs.getString("comment", "FieldMap"); }
 
+    // privacy: APRS is public by law (no encryption on ham bands), so it is opt-in for team traffic
+    public boolean aprsTeam() { return prefs.getBoolean("aprsTeam", false); }
+    public boolean aprsPosition() { return prefs.getBoolean("aprsPos", false); }
+    public boolean noGate() { return prefs.getBoolean("nogate", true); }
+    public int meshChannel() { return prefs.getInt("meshChannel", 0); }
+    public boolean meshTeamOnly() { return prefs.getBoolean("meshTeamOnly", true); }
+    public boolean background() { return prefs.getBoolean("background", true); }
+
+    private final Runnable overdueTask = new Runnable() {
+        @Override public void run() {
+            Alerts.checkOverdue(FieldMapApp.this, sessionStart);
+            main.postDelayed(this, 60_000);
+        }
+    };
+
+    /** Starts/stops the background service to match settings and radio state. */
+    public void updateService() {
+        boolean want = background() && (radio.getState() != RadioLink.State.OFF || mesh.getState() != RadioLink.State.OFF);
+        if (want && !serviceRunning) FieldMapService.start(this);
+        else if (!want && serviceRunning) FieldMapService.stop(this);
+        else if (serviceRunning) Alerts.updateStatus(this);
+    }
+
     public String myCall() {
         String c = callsign();
         if (c.isEmpty()) return "";
@@ -102,7 +129,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public boolean canTransmit() { return hasCallsign() && radio.isConnected(); }
 
     /** Anything that can send right now: APRS (with callsign) or Meshtastic. */
-    public boolean canShare() { return canTransmit() || mesh.isConnected(); }
+    public boolean canShare() { return mesh.isConnected() || (canTransmit() && aprsTeam()); }
 
     /** Friendly name for a callsign or Meshtastic node id. */
     public String displayName(String key) {
@@ -161,8 +188,10 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     private List<String> pathList() {
         List<String> out = new ArrayList<>();
         for (String p : path().toUpperCase(Locale.US).split("[,\\s]+")) {
-            if (!p.trim().isEmpty()) out.add(p.trim());
+            if (!p.trim().isEmpty() && !p.trim().equals("NOGATE")) out.add(p.trim());
         }
+        // iGates must not copy packets marked NOGATE to the internet (aprs.fi etc.)
+        if (noGate()) out.add("NOGATE");
         return out;
     }
 
@@ -181,7 +210,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         Location l = lastLoc;
         if (l == null) { log("Beacon skipped: no GPS fix yet"); return false; }
         boolean ok = false;
-        if (canTransmit()) {
+        if (canTransmit() && aprsPosition()) {
             ok = sendInfo(Aprs.position(l.getLatitude(), l.getLongitude(), symTable(), symCode(), statusComment()));
             if (ok) lastBeacon = System.currentTimeMillis();
         }
@@ -194,7 +223,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         if (l == null || !mesh.isConnected()) return false;
         byte[] pos = Mesh.positionPayload(l.getLatitude(), l.getLongitude(),
                 l.hasAltitude() ? (int) Math.round(l.getAltitude()) : 0, (int) (System.currentTimeMillis() / 1000));
-        boolean ok = mesh.send(Mesh.packet(Mesh.BROADCAST, 0, Mesh.PORT_POSITION, pos, newPacketId(), false));
+        boolean ok = mesh.send(Mesh.packet(Mesh.BROADCAST, meshChannel(), Mesh.PORT_POSITION, pos, newPacketId(), false));
         if (ok) { lastMeshBeacon = System.currentTimeMillis(); log("MESH TX position"); }
         return ok;
     }
@@ -203,11 +232,11 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
 
     public boolean sharePin(Store.Pin p, boolean live) {
         boolean ok = false;
-        if (canTransmit()) ok = sendInfo(Aprs.object(p.name, p.lat, p.lon, '\\', 'A', p.comment, live));
+        if (canTransmit() && aprsTeam()) ok = sendInfo(Aprs.object(p.name, p.lat, p.lon, '\\', 'A', p.comment, live));
         if (mesh.isConnected()) {
             if (p.meshId == 0) p.meshId = newPacketId();
             byte[] wp = Mesh.waypointPayload(p.meshId, p.lat, p.lon, live ? 0 : 1, p.name, p.comment);
-            boolean m = mesh.send(Mesh.packet(Mesh.BROADCAST, 0, Mesh.PORT_WAYPOINT, wp, newPacketId(), true));
+            boolean m = mesh.send(Mesh.packet(Mesh.BROADCAST, meshChannel(), Mesh.PORT_WAYPOINT, wp, newPacketId(), true));
             if (m) log("MESH TX waypoint " + p.name + (live ? "" : " (delete)"));
             ok |= m;
         }
@@ -226,8 +255,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         if (dest.equals(group())) {
             boolean ok = false;
             String via = "";
-            if (canTransmit() && sendInfo(Aprs.message(dest, text, null))) { ok = true; via = "APRS"; }
-            if (mesh.isConnected() && mesh.send(Mesh.text(Mesh.BROADCAST, 0, text, newPacketId()))) {
+            if (canTransmit() && aprsTeam() && sendInfo(Aprs.message(dest, text, null))) { ok = true; via = "APRS"; }
+            if (mesh.isConnected() && mesh.send(Mesh.text(Mesh.BROADCAST, meshChannel(), text, newPacketId()))) {
                 ok = true; via = via.isEmpty() ? "MESH" : via + "+MESH";
                 log("MESH TX text to channel");
             }
@@ -246,7 +275,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         if (!mesh.isConnected()) { log("TX blocked: Meshtastic not connected"); return false; }
         int num;
         try { num = (int) Long.parseLong(nodeId.substring(1), 16); } catch (NumberFormatException e) { return false; }
-        boolean ok = mesh.send(Mesh.text(num, 0, text, newPacketId()));
+        boolean ok = mesh.send(Mesh.text(num, meshChannel(), text, newPacketId()));
         if (ok) {
             log("MESH TX text to " + nodeId);
             store.addMessage(myLabel(), nodeId, text, null, true, "MESH");
@@ -275,7 +304,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         @Override public void run() {
             int secs = beaconSeconds();
             long now = System.currentTimeMillis();
-            if (secs > 0 && canTransmit() && now - lastBeacon >= secs * 1000L - 2000) {
+            if (secs > 0 && canTransmit() && aprsPosition() && now - lastBeacon >= secs * 1000L - 2000) {
                 Location l = lastLoc;
                 if (l != null && sendInfo(Aprs.position(l.getLatitude(), l.getLongitude(), symTable(), symCode(), statusComment())))
                     lastBeacon = now;
@@ -294,7 +323,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         log("Radio " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
         if (state == RadioLink.State.CONNECTED) {
             main.postDelayed(() -> {
-                if (canTransmit() && beaconSeconds() > 0) {
+                if (canTransmit() && aprsPosition() && beaconSeconds() > 0) {
                     Location l = lastLoc;
                     if (l != null && sendInfo(Aprs.position(l.getLatitude(), l.getLongitude(), symTable(), symCode(), statusComment())))
                         lastBeacon = System.currentTimeMillis();
@@ -302,6 +331,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
             }, 2000);
         }
         restartBeaconTask();
+        updateService();
         notifyRadio();
     }
 
@@ -317,6 +347,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         log("Mesh " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
         if (state == RadioLink.State.CONNECTED) lastMeshBeacon = 0;
         restartBeaconTask();
+        updateService();
         notifyRadio();
     }
 
@@ -339,7 +370,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
             case NODE_INFO: {
                 Mesh.Node n = e.node;
                 nodeNames.put(n.num, n.label());
-                if (n.num != myNodeNum && n.hasPosition() && passesFilter(n.id)) {
+                boolean onTeam = !meshTeamOnly() || n.channel == meshChannel();
+                if (n.num != myNodeNum && n.hasPosition() && onTeam && passesFilter(n.id)) {
                     long heard = n.lastHeard > 0 ? n.lastHeard * 1000 : now - 3600_000L;
                     Store.Station old = store.stations.get(n.id);
                     if (old == null || old.time < heard)
@@ -361,7 +393,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                 break;
             case POSITION:
                 log("MESH RX position " + displayName(fromId));
-                if (e.from != myNodeNum && passesFilter(fromId)) {
+                if (e.from != myNodeNum && passesFilter(fromId) && (!meshTeamOnly() || e.channel == meshChannel())) {
                     store.upsertStation(fromId, e.lat, e.lon, '/', '[', "", "MESH", nodeNames.get(e.from), now);
                     notifyData();
                 }
@@ -370,8 +402,13 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                 if (e.from == myNodeNum) break;
                 boolean broadcast = e.to == Mesh.BROADCAST;
                 if (!broadcast && e.to != myNodeNum) break;
+                if (broadcast && e.channel != meshChannel()) {
+                    log("MESH RX text on other channel " + e.channel + " (ignored)");
+                    break;
+                }
                 log("MESH RX text " + displayName(fromId) + ": " + e.text);
                 store.addMessage(fromId, broadcast ? group() : myLabel(), e.text, null, false, "MESH");
+                Alerts.message(this, displayName(fromId), e.text, !broadcast);
                 notifyData();
                 break;
             }
@@ -381,9 +418,14 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                 String id = "wp:" + Integer.toHexString(w.id);
                 boolean expired = w.expire == 1 || (w.expire > 1 && (w.expire & 0xFFFFFFFFL) < now / 1000);
                 log("MESH RX waypoint " + w.name + (expired || !w.hasPosition() ? " (deleted)" : ""));
+                if (meshTeamOnly() && e.channel != meshChannel()) break;
                 if (expired || !w.hasPosition()) store.removePin(id);
-                else if (passesFilter(fromId))
-                    store.upsertRemotePin(id, displayName(fromId), w.name.isEmpty() ? "Waypoint" : w.name, w.lat, w.lon, w.desc);
+                else if (passesFilter(fromId)) {
+                    boolean isNew = !store.pins.containsKey(id);
+                    String nm = w.name.isEmpty() ? "Waypoint" : w.name;
+                    store.upsertRemotePin(id, displayName(fromId), nm, w.lat, w.lon, w.desc);
+                    if (isNew) Alerts.waypoint(this, displayName(fromId), nm);
+                }
                 notifyData();
                 break;
             }
@@ -418,7 +460,10 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                     store.removePin("obj:" + p.name);
                     notifyData();
                 } else if (p.hasPosition()) {
+                    boolean isNew = !store.pins.containsKey("obj:" + p.name);
                     store.upsertRemotePin(p.source, p.name, p.lat, p.lon, p.comment);
+                    // APRS is a public network: only alert for stations on your track filter list
+                    if (isNew && !prefs.getString("filter", "").trim().isEmpty()) Alerts.waypoint(this, p.source, p.name);
                     notifyData();
                 }
                 break;
@@ -447,6 +492,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         }
         if (store.isDuplicate(p.source, p.msgText, p.msgId)) return;
         store.addMessage(p.source, to.toUpperCase(Locale.US), p.msgText, p.msgId, false);
+        Alerts.message(this, p.source, p.msgText, toMe);
         notifyData();
     }
 

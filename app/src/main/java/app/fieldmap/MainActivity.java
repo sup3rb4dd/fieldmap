@@ -138,6 +138,12 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         else ActivityCompat.requestPermissions(this,
                 new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
 
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED && !app.prefs.getBoolean("askedNotif", false)) {
+            app.prefs.edit().putBoolean("askedNotif", true).apply();
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 9);
+        }
+
         if (!app.hasCallsign() && !app.prefs.getBoolean("introShown", false)) {
             app.prefs.edit().putBoolean("introShown", true).apply();
             new AlertDialog.Builder(this)
@@ -765,6 +771,16 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     }
 
     private boolean requireShare() {
+        if (app.mesh.isConnected()) return true;
+        if (app.canTransmit() && !app.aprsTeam()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("// APRS IS PUBLIC")
+                    .setMessage("Only the UV-PRO is connected, and team traffic over APRS is turned off because "
+                            + "anyone can read APRS. Connect the Meshtastic radio, or allow APRS in Config ▸ Privacy.")
+                    .setPositiveButton("Config", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
+                    .setNegativeButton("Close", null).show();
+            return false;
+        }
         if (app.canShare()) return true;
         if (!app.radio.isConnected()) {
             toast("Connect the UV-PRO or Meshtastic radio first (tap RADIO)");
@@ -1109,6 +1125,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         refreshMarkers();
         updateRadioStatus();
         updateCenterText();
+        app.updateService();
     }
 
     @Override

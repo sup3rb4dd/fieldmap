@@ -15,6 +15,9 @@ public class SettingsActivity extends AppCompatActivity {
 
     private static final String[] BEACON_NAMES = {"Off (manual only)", "1 minute", "2 minutes", "5 minutes", "10 minutes", "30 minutes"};
     private static final int[] BEACON_SECS = {0, 60, 120, 300, 600, 1800};
+    private static final String[] OVERDUE_NAMES = {"10 minutes", "15 minutes", "30 minutes", "60 minutes"};
+    private static final int[] OVERDUE_MIN = {10, 15, 30, 60};
+    private static final String[] CH_NAMES = {"0 · Primary", "1 · Secondary", "2", "3", "4", "5", "6", "7"};
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -36,6 +39,30 @@ public class SettingsActivity extends AppCompatActivity {
         detail.setSelection(app.prefs.getInt("detail", 1));
         CheckBox imperial = findViewById(R.id.setImperial);
         CheckBox keepOn = findViewById(R.id.setKeepOn);
+        Spinner meshCh = findViewById(R.id.setMeshCh);
+        CheckBox teamOnly = findViewById(R.id.setTeamOnly);
+        CheckBox aprsTeam = findViewById(R.id.setAprsTeam);
+        CheckBox aprsPos = findViewById(R.id.setAprsPos);
+        CheckBox nogate = findViewById(R.id.setNogate);
+        CheckBox background = findViewById(R.id.setBackground);
+        CheckBox alertMsg = findViewById(R.id.setAlertMsg);
+        CheckBox alertWpt = findViewById(R.id.setAlertWpt);
+        CheckBox alertOverdue = findViewById(R.id.setAlertOverdue);
+        Spinner overdueMin = findViewById(R.id.setOverdueMin);
+
+        meshCh.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, CH_NAMES));
+        meshCh.setSelection(Math.max(0, Math.min(7, app.meshChannel())));
+        overdueMin.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, OVERDUE_NAMES));
+        int om = app.prefs.getInt("overdueMin", 15);
+        for (int i = 0; i < OVERDUE_MIN.length; i++) if (OVERDUE_MIN[i] == om) overdueMin.setSelection(i);
+        teamOnly.setChecked(app.meshTeamOnly());
+        aprsTeam.setChecked(app.aprsTeam());
+        aprsPos.setChecked(app.aprsPosition());
+        nogate.setChecked(app.noGate());
+        background.setChecked(app.background());
+        alertMsg.setChecked(app.prefs.getBoolean("alertMsg", true));
+        alertWpt.setChecked(app.prefs.getBoolean("alertWpt", true));
+        alertOverdue.setChecked(app.prefs.getBoolean("alertOverdue", true));
 
         call.setText(app.callsign());
         ssid.setText(String.valueOf(app.ssid()));
@@ -81,8 +108,19 @@ public class SettingsActivity extends AppCompatActivity {
                     .putBoolean("imperial", imperial.isChecked())
                     .putBoolean("keepOn", keepOn.isChecked())
                     .putInt("detail", Math.max(0, detail.getSelectedItemPosition()))
+                    .putInt("meshChannel", Math.max(0, meshCh.getSelectedItemPosition()))
+                    .putBoolean("meshTeamOnly", teamOnly.isChecked())
+                    .putBoolean("aprsTeam", aprsTeam.isChecked())
+                    .putBoolean("aprsPos", aprsPos.isChecked())
+                    .putBoolean("nogate", nogate.isChecked())
+                    .putBoolean("background", background.isChecked())
+                    .putBoolean("alertMsg", alertMsg.isChecked())
+                    .putBoolean("alertWpt", alertWpt.isChecked())
+                    .putBoolean("alertOverdue", alertOverdue.isChecked())
+                    .putInt("overdueMin", OVERDUE_MIN[Math.max(0, overdueMin.getSelectedItemPosition())])
                     .apply();
-            Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
+            app.updateService();
+            Toast.makeText(this, "CONFIG COMMITTED", Toast.LENGTH_SHORT).show();
             finish();
         });
     }

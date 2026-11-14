@@ -62,6 +62,7 @@ public final class Mesh {
         public String id = "", longName = "", shortName = "";
         public double lat = Double.NaN, lon = Double.NaN;
         public long lastHeard; // unix seconds
+        public int channel;    // channel index the node was last heard on
         public boolean hasPosition() { return !Double.isNaN(lat); }
         public String label() {
             if (!shortName.isEmpty() && !longName.isEmpty()) return longName;
@@ -127,6 +128,7 @@ public final class Mesh {
                     break;
                 }
                 case 5: n.lastHeard = r.value & 0xFFFFFFFFL; break;
+                case 7: n.channel = r.i32(); break;
                 default: break;
             }
         }
