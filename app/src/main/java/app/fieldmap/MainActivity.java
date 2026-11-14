@@ -1660,6 +1660,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         app.prefs.edit().putBoolean("wantAprs", false).apply();
                         app.radio.disconnect();
                     })
+                    .setNeutralButton("Change port", (d, w) -> choosePort())
                     .setNegativeButton("Close", null).show();
             return;
         }
@@ -1807,8 +1808,36 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
     }
 
+    /** The UV-PRO has several Bluetooth serial ports; only one is the packet modem. */
+    private void choosePort() {
+        final int[] vals = {0, 100, 1, 2, 3, 4, 5, 6};
+        final String[] names = {"Auto (port 1, then standard lookup)", "Standard lookup only", "Port 1", "Port 2", "Port 3", "Port 4", "Port 5", "Port 6"};
+        int cur = app.prefs.getInt("kissPort", 0), sel = 0;
+        for (int i = 0; i < vals.length; i++) if (vals[i] == cur) sel = i;
+        new AlertDialog.Builder(this)
+                .setTitle("// UV-PRO BLUETOOTH PORT")
+                .setSingleChoiceItems(names, sel, (d, which) -> {
+                    app.prefs.edit().putInt("kissPort", vals[which]).apply();
+                    d.dismiss();
+                    String addr = app.prefs.getString("lastRadio", "");
+                    BluetoothAdapter ad = adapterOrToast();
+                    app.radio.disconnect();
+                    if (ad != null && BluetoothAdapter.checkBluetoothAddress(addr)) {
+                        final BluetoothDevice dev = ad.getRemoteDevice(addr);
+                        // give the radio a moment to let go of the old connection
+                        clockHandler.postDelayed(() -> app.radio.connect(dev), 1500);
+                        toast("Reconnecting on " + names[which]);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private String radioSummary() {
         return "State: " + app.radio.getState() + "\nDevice: " + app.radio.deviceName()
+                + "\nBluetooth: " + app.radio.how
+                + "\n\nIf packets show as sent in the log but the radio never keys up, the app may be on the wrong port: try Change port. "
+                + "On the right one the radio's screen shows a small link icon next to the power level.\n"
                 + "\nPackets received: " + app.radio.rxCount + "\nPackets sent: " + app.radio.txCount
                 + (app.gmrs() ? "\nMode: GMRS · " + (app.gmrsReady() ? app.gmrsCall() + " / " + app.gmrsUnit() : "setup not finished — listen only")
                         + "\nWaiting to send: " + app.gmrsQueue.size()

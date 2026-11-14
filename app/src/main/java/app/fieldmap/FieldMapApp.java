@@ -915,7 +915,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
 
     @Override
     public void onRadioState(RadioLink.State state, String detail) {
-        log("Radio " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
+        log("Radio " + state + (detail.isEmpty() ? "" : " (" + detail + ")")
+                + (state == RadioLink.State.CONNECTED ? " via " + radio.how : ""));
         if (state == RadioLink.State.OFF && "LOST".equals(detail) && !mapVisible) Alerts.commsLost(this, "UV-PRO");
         if (state != RadioLink.State.CONNECTED) gmrsQueue.clear();
         if (state == RadioLink.State.CONNECTED) {

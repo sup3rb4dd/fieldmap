@@ -151,26 +151,43 @@ public class RadioLink {
             if (a != null) a.cancelDiscovery();
         } catch (SecurityException ignored) {
         }
-        // 1) standard SPP lookup
+        // The UV-PRO offers more than one serial port over Bluetooth, and only one of them is the
+        // KISS modem (port 1 on the radios people have written up). The standard lookup can land on
+        // the other one, which accepts the connection and then ignores every packet. So port 1 is
+        // tried first, and the port can be chosen by hand from the UV-PRO screen.
+        int want = FieldMapApp.get().prefs.getInt("kissPort", 0);   // 0 auto, 1-9 that port, 100 standard lookup only
+        if (want >= 1 && want <= 9) return channel(d, want);
+        if (want == 0) {
+            BluetoothSocket s = channel(d, 1);
+            if (s != null) return s;
+        }
         try {
             BluetoothSocket s = d.createRfcommSocketToServiceRecord(SPP);
             s.connect();
+            how = "standard lookup";
             return s;
         } catch (IOException | SecurityException ignored) {
         }
-        // 2) insecure SPP
         try {
             BluetoothSocket s = d.createInsecureRfcommSocketToServiceRecord(SPP);
             s.connect();
+            how = "standard lookup (insecure)";
             return s;
         } catch (IOException | SecurityException ignored) {
         }
-        // 3) direct RFCOMM channel 1 (works on some radios with odd SDP records)
+        return null;
+    }
+
+    /** How the current connection was opened, for the UV-PRO screen and the log. */
+    public volatile String how = "";
+
+    private BluetoothSocket channel(BluetoothDevice d, int ch) {
         try {
             Method m = d.getClass().getMethod("createRfcommSocket", int.class);
-            BluetoothSocket s = (BluetoothSocket) m.invoke(d, 1);
+            BluetoothSocket s = (BluetoothSocket) m.invoke(d, ch);
             if (s != null) {
                 s.connect();
+                how = "port " + ch;
                 return s;
             }
         } catch (Exception ignored) {
