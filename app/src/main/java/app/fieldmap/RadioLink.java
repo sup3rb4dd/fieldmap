@@ -67,6 +67,12 @@ public class RadioLink {
         deadline = System.currentTimeMillis() + giveUpMs;
         device = d;
         wanted = true;
+        if (FieldMapApp.get().prefs.getInt("kissPort", 0) == PORT_BLE) {
+            bleMode = true;
+            main.post(this::bleOpen);
+            return;
+        }
+        bleMode = false;
         worker = new Thread(this::run, "radio-link");
         worker.start();
     }
@@ -76,6 +82,7 @@ public class RadioLink {
         closeSocket();
         if (worker != null) worker.interrupt();
         worker = null;
+        main.post(this::bleClose);
         setState(State.OFF, "");
     }
 
@@ -83,6 +90,7 @@ public class RadioLink {
 
     /** Sends one already-KISS-encoded frame. Returns false if not connected. */
     public boolean send(byte[] kissFrame) {
+        if (bleMode) return bleSend(kissFrame);
         OutputStream o = out;
         if (o == null || state != State.CONNECTED) return false;
         try {
@@ -193,6 +201,227 @@ public class RadioLink {
         } catch (Exception ignored) {
         }
         return null;
+    }
+
+    // =====================================================================
+    // Bluetooth Low Energy: some radios (and some firmware versions) only offer the packet
+    // modem this way. Bytes are the same KISS stream, cut into small pieces.
+    // =====================================================================
+
+    public static final int PORT_BLE = 200;
+    private static final UUID KISS_SVC = UUID.fromString("00000001-ba2a-46c9-ae49-01b0961f68bb");
+    private static final UUID NUS_SVC = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+    private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+
+    private volatile boolean bleMode = false;
+    private android.bluetooth.BluetoothGatt gatt;
+    private android.bluetooth.BluetoothGattCharacteristic bleWrite;
+    private final java.util.ArrayDeque<byte[]> bleQueue = new java.util.ArrayDeque<>();
+    private boolean bleBusy = false;
+    private int bleChunk = 20, bleAttempt = 0;
+    private final Kiss.Decoder bleDecoder = new Kiss.Decoder();
+
+    private static void note(String s) { FieldMapApp.get().log("BLE " + s); }
+
+    private void bleOpen() {
+        BluetoothDevice d = device;
+        if (!wanted || !bleMode || d == null) return;
+        setState(bleAttempt == 0 ? State.CONNECTING : State.RETRYING, deviceName());
+        try {
+            gatt = d.connectGatt(FieldMapApp.get(), false, gattCb, BluetoothDevice.TRANSPORT_LE);
+        } catch (SecurityException e) {
+            bleRetry();
+        }
+    }
+
+    private void bleClose() {
+        bleWrite = null;
+        bleBusy = false;
+        bleQueue.clear();
+        android.bluetooth.BluetoothGatt g = gatt;
+        gatt = null;
+        if (g != null) {
+            try { g.disconnect(); g.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private void bleRetry() {
+        bleClose();
+        if (!wanted || !bleMode) return;
+        if (System.currentTimeMillis() > deadline) {
+            wanted = false;
+            setState(State.OFF, "LOST");
+            return;
+        }
+        bleAttempt++;
+        setState(State.RETRYING, deviceName());
+        main.postDelayed(this::bleOpen, Math.min(30000, 3000L * bleAttempt));
+    }
+
+    private boolean bleSend(byte[] kiss) {
+        if (state != State.CONNECTED) return false;
+        final byte[] copy = kiss.clone();
+        main.post(() -> {
+            for (int i = 0; i < copy.length; i += bleChunk)
+                bleQueue.add(java.util.Arrays.copyOfRange(copy, i, Math.min(copy.length, i + bleChunk)));
+            blePump();
+        });
+        txCount++;
+        return true;
+    }
+
+    @SuppressWarnings("deprecation")
+    private void blePump() {
+        android.bluetooth.BluetoothGatt g = gatt;
+        android.bluetooth.BluetoothGattCharacteristic c = bleWrite;
+        if (bleBusy || g == null || c == null || bleQueue.isEmpty()) return;
+        byte[] part = bleQueue.peek();
+        int type = (c.getProperties() & android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+                ? android.bluetooth.BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                : android.bluetooth.BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
+        boolean ok;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                ok = g.writeCharacteristic(c, part, type) == android.bluetooth.BluetoothStatusCodes.SUCCESS;
+            } else {
+                c.setWriteType(type);
+                c.setValue(part);
+                ok = g.writeCharacteristic(c);
+            }
+        } catch (SecurityException e) {
+            ok = false;
+        }
+        if (ok) { bleBusy = true; bleQueue.poll(); }
+        else main.postDelayed(this::blePump, 300);
+    }
+
+    private void bleBytes(byte[] v) {
+        if (v == null) return;
+        final byte[] copy = v.clone();
+        main.post(() -> {
+            for (byte[] f : bleDecoder.feed(copy, copy.length)) {
+                rxCount++;
+                cb.onFrame(f);
+            }
+        });
+    }
+
+    private final android.bluetooth.BluetoothGattCallback gattCb = new android.bluetooth.BluetoothGattCallback() {
+        @Override
+        public void onConnectionStateChange(android.bluetooth.BluetoothGatt g, int status, int newState) {
+            main.post(() -> {
+                if (g != gatt) return;
+                if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                    try { if (!g.requestMtu(185)) g.discoverServices(); } catch (SecurityException e) { bleRetry(); }
+                } else if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
+                    note("link closed (status " + status + ")");
+                    bleRetry();
+                }
+            });
+        }
+
+        @Override
+        public void onMtuChanged(android.bluetooth.BluetoothGatt g, int mtu, int status) {
+            main.post(() -> {
+                if (g != gatt) return;
+                if (status == android.bluetooth.BluetoothGatt.GATT_SUCCESS && mtu > 23) bleChunk = Math.min(mtu - 3, 180);
+                try { g.discoverServices(); } catch (SecurityException e) { bleRetry(); }
+            });
+        }
+
+        @Override
+        public void onServicesDiscovered(android.bluetooth.BluetoothGatt g, int status) {
+            main.post(() -> {
+                if (g != gatt) return;
+                android.bluetooth.BluetoothGattService svc = g.getService(KISS_SVC);
+                String name = "packet-modem service";
+                if (svc == null) { svc = g.getService(NUS_SVC); name = "serial service"; }
+                if (svc == null) {
+                    StringBuilder sb = new StringBuilder();
+                    for (android.bluetooth.BluetoothGattService x : g.getServices()) sb.append(x.getUuid().toString(), 0, 8).append(' ');
+                    note("no packet modem found on this radio. Services: " + sb);
+                    wanted = false;
+                    bleClose();
+                    setState(State.OFF, "NO MODEM OVER LOW ENERGY");
+                    return;
+                }
+                // which of the two channels is "to the radio" differs between write-ups: go by what each one can do
+                android.bluetooth.BluetoothGattCharacteristic w = null, n = null;
+                for (android.bluetooth.BluetoothGattCharacteristic c : svc.getCharacteristics()) {
+                    int p = c.getProperties();
+                    if (n == null && (p & (android.bluetooth.BluetoothGattCharacteristic.PROPERTY_NOTIFY
+                            | android.bluetooth.BluetoothGattCharacteristic.PROPERTY_INDICATE)) != 0) n = c;
+                    else if (w == null && (p & (android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE
+                            | android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE)) != 0) w = c;
+                }
+                if (w == null) { note("modem service has no channel to send on"); bleRetry(); return; }
+                bleWrite = w;
+                how = "Low Energy, " + name + ", " + bleChunk + "-byte pieces";
+                boolean waiting = false;
+                if (n != null) {
+                    try {
+                        g.setCharacteristicNotification(n, true);
+                        android.bluetooth.BluetoothGattDescriptor d = n.getDescriptor(CCCD);
+                        if (d != null) {
+                            byte[] on = (n.getProperties() & android.bluetooth.BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0
+                                    ? android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                    : android.bluetooth.BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
+                            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                                waiting = g.writeDescriptor(d, on) == android.bluetooth.BluetoothStatusCodes.SUCCESS;
+                            } else {
+                                bleLegacyDescriptor(g, d, on);
+                                waiting = true;
+                            }
+                        }
+                    } catch (SecurityException ignored) { }
+                } else {
+                    note("modem service has no channel to receive on (send only)");
+                }
+                bleBusy = waiting;
+                bleAttempt = 0;
+                deadline = Long.MAX_VALUE;
+                setState(State.CONNECTED, deviceName());
+            });
+        }
+
+        @Override
+        public void onDescriptorWrite(android.bluetooth.BluetoothGatt g, android.bluetooth.BluetoothGattDescriptor d, int status) {
+            main.post(() -> {
+                if (g != gatt) return;
+                if (status != android.bluetooth.BluetoothGatt.GATT_SUCCESS) note("could not turn on receiving (status " + status + ")");
+                bleBusy = false;
+                blePump();
+            });
+        }
+
+        @Override
+        public void onCharacteristicWrite(android.bluetooth.BluetoothGatt g, android.bluetooth.BluetoothGattCharacteristic c, int status) {
+            main.post(() -> {
+                if (g != gatt) return;
+                if (status != android.bluetooth.BluetoothGatt.GATT_SUCCESS) note("radio refused a packet piece (status " + status + ")");
+                bleBusy = false;
+                blePump();
+            });
+        }
+
+        // Android 13+
+        @Override
+        public void onCharacteristicChanged(android.bluetooth.BluetoothGatt g, android.bluetooth.BluetoothGattCharacteristic c, byte[] value) {
+            if (g == gatt) bleBytes(value);
+        }
+
+        // Android 12 and older
+        @Override
+        @SuppressWarnings("deprecation")
+        public void onCharacteristicChanged(android.bluetooth.BluetoothGatt g, android.bluetooth.BluetoothGattCharacteristic c) {
+            if (android.os.Build.VERSION.SDK_INT < 33 && g == gatt) bleBytes(c.getValue());
+        }
+    };
+
+    @SuppressWarnings("deprecation")
+    private static void bleLegacyDescriptor(android.bluetooth.BluetoothGatt g, android.bluetooth.BluetoothGattDescriptor d, byte[] v) {
+        d.setValue(v);
+        g.writeDescriptor(d);
     }
 
     private void closeSocket() {

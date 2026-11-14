@@ -1810,8 +1810,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
 
     /** The UV-PRO has several Bluetooth serial ports; only one is the packet modem. */
     private void choosePort() {
-        final int[] vals = {0, 100, 1, 2, 3, 4, 5, 6};
-        final String[] names = {"Auto (port 1, then standard lookup)", "Standard lookup only", "Port 1", "Port 2", "Port 3", "Port 4", "Port 5", "Port 6"};
+        final int[] vals = {0, RadioLink.PORT_BLE, 100, 1, 2, 3};
+        final String[] names = {"Auto (classic Bluetooth, port 1 first)", "Bluetooth Low Energy", "Classic: standard lookup only", "Classic: port 1", "Classic: port 2", "Classic: port 3"};
         int cur = app.prefs.getInt("kissPort", 0), sel = 0;
         for (int i = 0; i < vals.length; i++) if (vals[i] == cur) sel = i;
         new AlertDialog.Builder(this)
