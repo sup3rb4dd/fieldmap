@@ -501,13 +501,13 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             c.drawPath(path, edge);
         } else {
             float hs = r * 0.75f;
-            c.drawRect(cx - hss, cy - hss, cx + hss, cy + hss, edge);
+            c.drawRect(cx - hs, cy - hs, cx + hs, cy + hs, edge);
             Paint frame = new Paint(fill);
             frame.setStyle(Paint.Style.STROKE);
             frame.setStrokeWidth(2 * d);
-            c.drawRect(cx - hss, cy - hss, cx + hss, cy + hss, frame);
+            c.drawRect(cx - hs, cy - hs, cx + hs, cy + hs, frame);
             Paint core = new Paint(fill);
-            c.drawRect(cx - hss * 0.35f, cy - hss * 0.35f, cx + hss * 0.35f, cy + hss * 0.35f, core);
+            c.drawRect(cx - hs * 0.35f, cy - hs * 0.35f, cx + hs * 0.35f, cy + hs * 0.35f, core);
         }
         float ty = sym + 12 * d;
         // tag plate: black box with colored text
