@@ -76,6 +76,7 @@ class MapTools {
     private final Button btnDraw;
 
     private boolean zoneMode = false;
+    private Store.Shape editing;   // set while a saved shape is being redrawn
     private Polygon draftFill;
     private Overlay draftTop;
 
@@ -150,6 +151,7 @@ class MapTools {
 
     void startDraw() {
         drawing = true;
+        editing = null;
         draft.clear();
         if (draftFill == null) {
             draftFill = new Polygon(map) {
@@ -198,10 +200,13 @@ class MapTools {
     }
 
     void cancelDraw() {
+        boolean wasEditing = editing != null;
+        editing = null;
         drawing = false;
         if (draftTop != null) map.getOverlays().remove(draftTop);
         draft.clear();
         updateDraw();
+        if (wasEditing) { app.store.touchShapes(); a.refreshMarkers(); } // show the saved copy again
     }
 
     private void updateDraw() {
@@ -271,7 +276,8 @@ class MapTools {
         final EditText name = new EditText(a);
         name.setHint("Name");
         name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-        name.setText((zoneMode ? "ZONE" : "RTE") + (app.store.shapes.size() + 1));
+        final Store.Shape editingNow = editing;
+        name.setText(editingNow != null ? editingNow.name : (zoneMode ? "ZONE" : "RTE") + (app.store.shapes.size() + 1));
         name.selectAll();
         box.addView(name);
         final RadioGroup kind = new RadioGroup(a);
@@ -287,6 +293,7 @@ class MapTools {
         box.addView(kind);
         final android.widget.Spinner color = new android.widget.Spinner(a);
         color.setAdapter(new android.widget.ArrayAdapter<>(a, android.R.layout.simple_spinner_dropdown_item, COLOR_NAMES));
+        if (editingNow != null) color.setSelection(colorIndex(colorOf(editingNow)));
         box.addView(color);
         final CheckBox share = new CheckBox(a);
         boolean can = app.mesh.isConnected() || app.tak.isConnected();
@@ -300,7 +307,15 @@ class MapTools {
                     String n = name.getText().toString().trim();
                     boolean closed = kind.getCheckedRadioButtonId() == area.getId();
                     if (n.isEmpty()) n = closed ? "ZONE" : "ROUTE";
-                    Store.Shape s = app.store.addMyShape(n, closed, pts, "");
+                    Store.Shape s;
+                    if (editingNow != null && app.store.shapes.containsKey(editingNow.id)) {
+                        s = editingNow;
+                        s.name = n;
+                        s.closed = closed;
+                        s.pts = new ArrayList<>(pts);
+                    } else {
+                        s = app.store.addMyShape(n, closed, pts, "");
+                    }
                     s.color = COLORS[Math.max(0, color.getSelectedItemPosition())];
                     app.store.touchShapes();
                     if (share.isChecked() && !app.shareShape(s)) a.toast("Saved, but it could not be sent");
@@ -333,8 +348,12 @@ class MapTools {
         text.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD));
         text.setColor(color);
         int w = (int) (text.measureText(label) + 12 * dd), h = (int) (20 * dd);
-        android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(Math.max(w, 1), h, android.graphics.Bitmap.Config.ARGB_8888);
+        // the picture is bigger than the tag: the clear margin around it still counts as a tap,
+        // so a finger doesn't have to land exactly on a small label
+        int mx = (int) (14 * dd), my = (int) (14 * dd);
+        android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(w + 2 * mx, h + 2 * my, android.graphics.Bitmap.Config.ARGB_8888);
         android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+        c.translate(mx, my);
         android.graphics.Paint plate = new android.graphics.Paint();
         plate.setColor(Color.parseColor("#CC000000"));
         c.drawRect(0, 0, w, h, plate);
@@ -369,6 +388,7 @@ class MapTools {
         shapeOverlays.clear();
         for (final Store.Shape s : app.store.shapes.values()) {
             if (s.pts.size() < 2) continue;
+            if (editing != null && editing.id.equals(s.id)) continue; // its draft is on screen instead
             int color = colorOf(s);
             List<GeoPoint> gp = new ArrayList<>();
             for (double[] p : s.pts) gp.add(new GeoPoint(p[0], p[1]));
@@ -419,75 +439,111 @@ class MapTools {
         map.getOverlays().addAll(at, shapeOverlays);
     }
 
+    /** Tapping a route, a zone or a zone's name tag: everything you can do with it, one tap away. */
     void shapeTapped(final String id) {
         final Store.Shape s = app.store.shapes.get(id);
         if (s == null) return;
-        String info = (s.closed
-                ? "ZONE · " + Shapes.formatArea(Shapes.area(s.pts), app.imperial()) + " · perimeter " + Geo.formatDistance(Shapes.length(s.pts, true), app.imperial())
-                : "ROUTE · " + Geo.formatDistance(Shapes.length(s.pts, false), app.imperial()) + " · " + s.pts.size() + " points")
-                + (s.isMine() ? "" : "\nFrom " + s.owner)
-                + (s.src.isEmpty() ? "" : "\nImported from " + s.src);
+        String size = s.closed
+                ? Shapes.formatArea(Shapes.area(s.pts), app.imperial()) + " · " + Geo.formatDistance(Shapes.length(s.pts, true), app.imperial()) + " around"
+                : Geo.formatDistance(Shapes.length(s.pts, false), app.imperial()) + " · " + s.pts.size() + " points";
+        String from = (s.isMine() ? "" : " · from " + s.owner) + (s.src.isEmpty() ? "" : " · " + s.src);
+        final String EDIT = "Edit name and color", REDRAW = s.closed ? "Move or redraw the corners" : "Move or redraw the points",
+                FOLLOW = "Follow this route", CENTER = "Track the center", DELETE = "Delete",
+                SHARE = s.shared ? "Re-send to team" : "Share with team";
         final List<String> actions = new ArrayList<>();
-        if (s.isMine()) actions.add(s.shared ? "Re-send to team" : "Share with team");
-        if (s.isMine()) actions.add("Rename");
-        actions.add("Change color");
-        actions.add("Delete");
-        AlertDialog.Builder b = new AlertDialog.Builder(a)
-                .setTitle(s.name.toUpperCase(Locale.US))
-                .setMessage(info)
-                .setNegativeButton("Close", null)
-                .setNeutralButton("More…", (d, w) -> new AlertDialog.Builder(a)
-                        .setTitle(s.name.toUpperCase(Locale.US))
-                        .setItems(actions.toArray(new String[0]), (d2, which) -> {
-                            String act = actions.get(which);
-                            if (act.startsWith("Share") || act.startsWith("Re-send")) {
-                                if (!app.mesh.isConnected() && !app.tak.isConnected()) a.toast("Routes and areas go over Meshtastic or TAK. Connect one first.");
-                                else a.toast(app.shareShape(s) ? "Sent " + s.name : "Could not send (too long for one message?)");
-                            } else if (act.equals("Change color")) {
-                                pickColor(s);
-                            } else if (act.equals("Rename")) {
-                                final EditText name = new EditText(a);
-                                name.setText(s.name);
-                                new AlertDialog.Builder(a).setTitle("// RENAME").setView(name)
-                                        .setPositiveButton("Save", (d3, w3) -> {
-                                            String n = name.getText().toString().trim();
-                                            if (n.isEmpty()) return;
-                                            s.name = n;
-                                            app.store.touchShapes();
-                                        })
-                                        .setNegativeButton("Cancel", null).show();
-                            } else {
-                                app.unshareShape(s);
-                                app.store.removeShape(s.id);
-                                if (a.target != null && a.target.endsWith(":" + s.id)) a.target = null;
-                                a.refreshMarkers();
+        actions.add(EDIT);
+        if (s.src.isEmpty()) actions.add(REDRAW);
+        actions.add(s.closed ? CENTER : FOLLOW);
+        if (s.isMine() && s.src.isEmpty()) actions.add(SHARE);
+        actions.add(DELETE);
+        new AlertDialog.Builder(a)
+                .setTitle(s.name.toUpperCase(Locale.US) + "\n" + (s.closed ? "ZONE · " : "ROUTE · ") + size + from)
+                .setItems(actions.toArray(new String[0]), (d, which) -> {
+                    String act = actions.get(which);
+                    if (act.equals(EDIT)) editShape(s);
+                    else if (act.equals(REDRAW)) redraw(s);
+                    else if (act.equals(SHARE)) {
+                        if (!app.mesh.isConnected() && !app.tak.isConnected()) a.toast("Routes and zones go over Meshtastic or TAK. Connect one first.");
+                        else a.toast(app.shareShape(s) ? "Sent " + s.name : "Could not send (too long for one message?)");
+                    } else if (act.equals(FOLLOW)) {
+                        // start from the point nearest to me
+                        int best = 0;
+                        Location l = app.lastLoc;
+                        if (l != null) {
+                            double bd = Double.MAX_VALUE;
+                            for (int i = 0; i < s.pts.size(); i++) {
+                                double dist = Geo.distance(l.getLatitude(), l.getLongitude(), s.pts.get(i)[0], s.pts.get(i)[1]);
+                                if (dist < bd) { bd = dist; best = i; }
                             }
-                        }).show());
-        if (!s.closed) {
-            b.setPositiveButton("Follow", (d, w) -> {
-                // start from the point nearest to me
-                int best = 0;
-                Location l = app.lastLoc;
-                if (l != null) {
-                    double bd = Double.MAX_VALUE;
-                    for (int i = 0; i < s.pts.size(); i++) {
-                        double dist = Geo.distance(l.getLatitude(), l.getLongitude(), s.pts.get(i)[0], s.pts.get(i)[1]);
-                        if (dist < bd) { bd = dist; best = i; }
+                            // already standing on it: head for the next one
+                            if (bd < 30 && best < s.pts.size() - 1) best++;
+                        }
+                        a.target = "rte:" + best + ":" + s.id;
+                        a.refreshTarget();
+                    } else if (act.equals(CENTER)) {
+                        double[] c = Shapes.center(s.pts);
+                        a.target = "pt:" + c[0] + "," + c[1] + "," + s.name.replace(",", " ");
+                        a.refreshTarget();
+                    } else if (act.equals(DELETE)) {
+                        new AlertDialog.Builder(a)
+                                .setTitle("// DELETE " + s.name.toUpperCase(Locale.US) + "?")
+                                .setPositiveButton("Delete", (d2, w2) -> {
+                                    app.unshareShape(s);
+                                    app.store.removeShape(s.id);
+                                    if (a.target != null && a.target.endsWith(":" + s.id)) a.target = null;
+                                    a.refreshMarkers();
+                                })
+                                .setNegativeButton("Cancel", null)
+                                .show();
                     }
-                    // already standing on it: head for the next one
-                    if (bd < 30 && best < s.pts.size() - 1) best++;
-                }
-                a.target = "rte:" + best + ":" + s.id;
-                a.refreshTarget();
-            });
-        } else {
-            b.setPositiveButton("Track center", (d, w) -> {
-                double[] c = Shapes.center(s.pts);
-                a.target = "pt:" + c[0] + "," + c[1] + "," + s.name.replace(",", " ");
-                a.refreshTarget();
-            });
-        }
-        b.show();
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void editShape(final Store.Shape s) {
+        LinearLayout box = new LinearLayout(a);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (20 * dd);
+        box.setPadding(pad, pad / 2, pad, 0);
+        final EditText name = new EditText(a);
+        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        name.setText(s.name);
+        name.setSelection(name.getText().length());
+        box.addView(name);
+        final android.widget.Spinner color = new android.widget.Spinner(a);
+        color.setAdapter(new android.widget.ArrayAdapter<>(a, android.R.layout.simple_spinner_dropdown_item, COLOR_NAMES));
+        color.setSelection(colorIndex(colorOf(s)));
+        box.addView(color);
+        new AlertDialog.Builder(a)
+                .setTitle("// EDIT")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> {
+                    String n = name.getText().toString().trim();
+                    if (!n.isEmpty()) s.name = n;
+                    s.color = COLORS[Math.max(0, color.getSelectedItemPosition())];
+                    app.store.touchShapes();
+                    a.refreshMarkers();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private static int colorIndex(int argb) {
+        for (int i = 0; i < COLORS.length; i++) if (COLORS[i] == argb) return i;
+        return 0;
+    }
+
+    /** Puts a saved shape back into the draw tool so its corners can be undone and re-placed. */
+    private void redraw(Store.Shape s) {
+        zoneMode = s.closed;
+        startDraw();
+        editing = s;
+        draft.addAll(s.pts);
+        app.store.touchShapes(); // hide the saved copy while its draft is on screen
+        a.refreshMarkers();
+        updateDraw();
+        a.toast("UNDO removes corners from the end. Add new ones, then DONE.");
     }
 
     // =====================================================================
