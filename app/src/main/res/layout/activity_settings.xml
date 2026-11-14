@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView style="@style/SettingsHeader" android:text="Settings" android:textSize="20sp" />
+
+        <TextView style="@style/SettingsLabel" android:text="Your callsign (required to transmit)" />
+        <EditText android:id="@+id/setCall" style="@style/SettingsField"
+            android:hint="e.g. KF0ABC" android:inputType="textCapCharacters|textNoSuggestions" android:maxLength="6" />
+
+        <TextView style="@style/SettingsLabel" android:text="SSID (7 = handheld, 9 = vehicle, 0 = none)" />
+        <EditText android:id="@+id/setSsid" style="@style/SettingsField" android:inputType="number" android:maxLength="2" />
+
+        <TextView style="@style/SettingsLabel" android:text="Team name (group chat address, up to 9 letters)" />
+        <EditText android:id="@+id/setGroup" style="@style/SettingsField"
+            android:inputType="textCapCharacters|textNoSuggestions" android:maxLength="9" />
+
+        <TextView style="@style/SettingsLabel" android:text="Send my position every" />
+        <Spinner android:id="@+id/setBeacon" android:layout_width="match_parent" android:layout_height="48dp" />
+
+        <TextView style="@style/SettingsLabel" android:text="Digipeater path (blank = direct only)" />
+        <EditText android:id="@+id/setPath" style="@style/SettingsField"
+            android:inputType="textCapCharacters|textNoSuggestions" />
+
+        <TextView style="@style/SettingsLabel" android:text="My map symbol" />
+        <Spinner android:id="@+id/setSymbol" android:layout_width="match_parent" android:layout_height="48dp" />
+
+        <TextView style="@style/SettingsLabel" android:text="Status text sent with position" />
+        <EditText android:id="@+id/setComment" style="@style/SettingsField" android:inputType="text" android:maxLength="40" />
+
+        <TextView style="@style/SettingsLabel" android:text="Only show these stations on the map (comma separated, blank = everyone)" />
+        <EditText android:id="@+id/setFilter" style="@style/SettingsField"
+            android:hint="e.g. KF0ABC, KF0XYZ" android:inputType="textCapCharacters|textNoSuggestions" />
+
+        <CheckBox android:id="@+id/setImperial" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:text="Miles / feet (off = km / m)" android:textColor="@color/text" />
+        <CheckBox android:id="@+id/setKeepOn" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Keep screen on" android:textColor="@color/text" />
+
+        <Button android:id="@+id/setSave" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="20dp" android:text="Save" />
+
+        <TextView
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textColor="@color/dim" android:textSize="12sp"
+            android:text="Transmitting APRS on the UV-PRO uses amateur frequencies and needs an amateur license. Without a callsign, FieldMap only listens." />
+    </LinearLayout>
+</ScrollView>

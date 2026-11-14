@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <org.osmdroid.views.MapView
+        android:id="@+id/map"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <ImageView
+        android:id="@+id/crosshair"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:layout_gravity="center"
+        android:src="@drawable/crosshair"
+        android:contentDescription="center" />
+
+    <!-- top bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_margin="8dp"
+        android:background="@drawable/panel_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="4dp">
+
+        <TextView
+            android:id="@+id/radioStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="8dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:text="● RADIO: OFF"
+            android:textColor="@color/dim"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <Button android:id="@+id/btnChat" style="@style/BarButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Chat" />
+        <Button android:id="@+id/btnList" style="@style/BarButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="List" />
+        <Button android:id="@+id/btnMenu" style="@style/BarButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="☰" android:textSize="18sp" />
+    </LinearLayout>
+
+    <!-- right side tools -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|center_vertical"
+        android:layout_marginEnd="4dp"
+        android:orientation="vertical">
+
+        <Button android:id="@+id/btnMe" style="@style/RoundButton" android:text="Me" />
+        <Button android:id="@+id/btnPin" style="@style/RoundButton" android:text="+Pin" />
+        <Button android:id="@+id/btnGrid" style="@style/RoundButton" android:text="Grid" />
+        <Button android:id="@+id/btnLayer" style="@style/RoundButton" android:text="Map" />
+        <Button android:id="@+id/btnNorth" style="@style/RoundButton" android:text="N↑" />
+    </LinearLayout>
+
+    <!-- bottom info panel -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_margin="8dp"
+        android:background="@drawable/panel_bg"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <LinearLayout
+            android:id="@+id/targetRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+            <TextView
+                android:id="@+id/tvTarget"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="@color/warn"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+            <Button android:id="@+id/btnClearTarget" style="@style/BarButton"
+                android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✕" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvMe"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="YOU  waiting for GPS…"
+            android:textColor="@color/accent"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvCenter"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:fontFamily="monospace"
+            android:textColor="@color/text"
+            android:textSize="13sp" />
+    </LinearLayout>
+</FrameLayout>

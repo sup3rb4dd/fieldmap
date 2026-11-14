@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.fieldmap'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.fieldmap'
+        minSdk 26
+        targetSdk 34
+        versionCode Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
+        versionName "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+    }
+
+    signingConfigs {
+        fieldmap {
+            storeFile file('fieldmap.jks')
+            storePassword 'fieldmap'
+            keyAlias 'fieldmap'
+            keyPassword 'fieldmap'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.fieldmap
+        }
+        debug {
+            signingConfig signingConfigs.fieldmap
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'org.osmdroid:osmdroid-android:6.1.20'
+}

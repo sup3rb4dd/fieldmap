@@ -1,0 +1,827 @@
+package app.fieldmap;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
+import org.osmdroid.api.IGeoPoint;
+import org.osmdroid.config.Configuration;
+import org.osmdroid.events.MapEventsReceiver;
+import org.osmdroid.events.MapListener;
+import org.osmdroid.events.ScrollEvent;
+import org.osmdroid.events.ZoomEvent;
+import org.osmdroid.tileprovider.cachemanager.CacheManager;
+import org.osmdroid.util.BoundingBox;
+import org.osmdroid.util.GeoPoint;
+import org.osmdroid.views.CustomZoomButtonsController;
+import org.osmdroid.views.MapView;
+import org.osmdroid.views.overlay.MapEventsOverlay;
+import org.osmdroid.views.overlay.Marker;
+import org.osmdroid.views.overlay.Overlay;
+import org.osmdroid.views.overlay.Polyline;
+import org.osmdroid.views.overlay.ScaleBarOverlay;
+import org.osmdroid.views.overlay.gestures.RotationGestureOverlay;
+import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
+import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import app.fieldmap.core.Geo;
+import app.fieldmap.core.Mgrs;
+
+@SuppressLint("MissingPermission")
+public class MainActivity extends AppCompatActivity implements FieldMapApp.Listener {
+
+    private static final int REQ_LOCATION = 1, REQ_BT = 2;
+
+    private FieldMapApp app;
+    private MapView map;
+    private MyLocationNewOverlay myLocOverlay;
+    private Polyline rangeLine;
+    private final List<Overlay> itemOverlays = new ArrayList<>();
+    private TextView tvMe, tvCenter, tvTarget, radioStatus;
+    private LinearLayout targetRow;
+    private Button btnChat;
+    private LocationManager lm;
+    private int layerIndex;
+
+    // selected target: "pin:<id>" or "sta:<call>" or "pt:<lat>,<lon>"
+    private String target;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        app = FieldMapApp.get();
+        Configuration.getInstance().load(this, getSharedPreferences("osmdroid", MODE_PRIVATE));
+        Configuration.getInstance().setUserAgentValue(getPackageName());
+        setContentView(R.layout.activity_main);
+
+        map = findViewById(R.id.map);
+        tvMe = findViewById(R.id.tvMe);
+        tvCenter = findViewById(R.id.tvCenter);
+        tvTarget = findViewById(R.id.tvTarget);
+        targetRow = findViewById(R.id.targetRow);
+        radioStatus = findViewById(R.id.radioStatus);
+        btnChat = findViewById(R.id.btnChat);
+
+        setupMap();
+
+        findViewById(R.id.btnMe).setOnClickListener(v -> centerOnMe());
+        findViewById(R.id.btnPin).setOnClickListener(v -> {
+            IGeoPoint c = map.getMapCenter();
+            promptNewPin(c.getLatitude(), c.getLongitude());
+        });
+        findViewById(R.id.btnGrid).setOnClickListener(v -> promptGoToGrid());
+        findViewById(R.id.btnLayer).setOnClickListener(v -> chooseLayer());
+        findViewById(R.id.btnNorth).setOnClickListener(v -> map.setMapOrientation(0));
+        findViewById(R.id.btnClearTarget).setOnClickListener(v -> { target = null; refreshTarget(); });
+        btnChat.setOnClickListener(v -> startActivity(new Intent(this, ChatActivity.class)));
+        findViewById(R.id.btnList).setOnClickListener(v -> showList());
+        findViewById(R.id.btnMenu).setOnClickListener(v -> showMenu());
+        radioStatus.setOnClickListener(v -> radioTapped());
+
+        lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (hasLocationPermission()) startLocation();
+        else ActivityCompat.requestPermissions(this,
+                new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+
+        if (!app.hasCallsign() && !app.prefs.getBoolean("introShown", false)) {
+            app.prefs.edit().putBoolean("introShown", true).apply();
+            new AlertDialog.Builder(this)
+                    .setTitle("Welcome to FieldMap")
+                    .setMessage("• Long-press the map to drop a pin.\n"
+                            + "• Tap any pin or station to get range and bearing.\n"
+                            + "• Use Map ▸ ☰ ▸ Download this area to save maps for offline use.\n\n"
+                            + "To share positions with your UV-PRO: turn on Menu ▸ General Settings ▸ KISS TNC on the radio, "
+                            + "pair it in Android Bluetooth settings, then tap RADIO at the top.\n\n"
+                            + "Set your callsign in Settings to transmit. Without one, FieldMap only listens.")
+                    .setPositiveButton("Settings", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
+                    .setNegativeButton("Later", null)
+                    .show();
+        }
+    }
+
+    // ---------- map ----------
+
+    private void setupMap() {
+        layerIndex = app.prefs.getInt("layer", 0);
+        map.setTileSource(Tiles.byIndex(layerIndex));
+        map.setMultiTouchControls(true);
+        map.getZoomController().setVisibility(CustomZoomButtonsController.Visibility.NEVER);
+        map.setTilesScaledToDpi(true);
+        map.setMinZoomLevel(3.0);
+        map.setMaxZoomLevel(19.0);
+
+        double lat = Double.longBitsToDouble(app.prefs.getLong("mapLat", Double.doubleToLongBits(39.5)));
+        double lon = Double.longBitsToDouble(app.prefs.getLong("mapLon", Double.doubleToLongBits(-98.35)));
+        double zoom = Double.longBitsToDouble(app.prefs.getLong("mapZoom", Double.doubleToLongBits(4.0)));
+        map.getController().setZoom(zoom);
+        map.getController().setCenter(new GeoPoint(lat, lon));
+
+        MapEventsOverlay events = new MapEventsOverlay(new MapEventsReceiver() {
+            @Override public boolean singleTapConfirmedHelper(GeoPoint p) { return false; }
+            @Override public boolean longPressHelper(GeoPoint p) {
+                promptNewPin(p.getLatitude(), p.getLongitude());
+                return true;
+            }
+        });
+        map.getOverlays().add(0, events);
+
+        RotationGestureOverlay rot = new RotationGestureOverlay(map);
+        rot.setEnabled(true);
+        map.getOverlays().add(rot);
+
+        ScaleBarOverlay scale = new ScaleBarOverlay(map);
+        scale.setAlignBottom(false);
+        scale.setScaleBarOffset(30, (int) (90 * getResources().getDisplayMetrics().density));
+        scale.setUnitsOfMeasure(app.imperial() ? ScaleBarOverlay.UnitsOfMeasure.imperial : ScaleBarOverlay.UnitsOfMeasure.metric);
+        map.getOverlays().add(scale);
+
+        rangeLine = new Polyline();
+        rangeLine.getOutlinePaint().setColor(Color.parseColor("#FFFFB000"));
+        rangeLine.getOutlinePaint().setStrokeWidth(5f);
+        rangeLine.setVisible(false);
+        rangeLine.setInfoWindow(null);
+        map.getOverlays().add(rangeLine);
+
+        myLocOverlay = new MyLocationNewOverlay(new GpsMyLocationProvider(this), map);
+        map.getOverlays().add(myLocOverlay);
+
+        map.addMapListener(new MapListener() {
+            @Override public boolean onScroll(ScrollEvent event) { updateCenterText(); return false; }
+            @Override public boolean onZoom(ZoomEvent event) { updateCenterText(); return false; }
+        });
+        refreshMarkers();
+    }
+
+    private void chooseLayer() {
+        new AlertDialog.Builder(this)
+                .setTitle("Map layer")
+                .setSingleChoiceItems(Tiles.NAMES, layerIndex, (d, which) -> {
+                    layerIndex = which;
+                    app.prefs.edit().putInt("layer", which).apply();
+                    map.setTileSource(Tiles.byIndex(which));
+                    d.dismiss();
+                })
+                .show();
+    }
+
+    private void centerOnMe() {
+        Location l = app.lastLoc;
+        if (l == null) {
+            toast(hasLocationPermission() ? "Waiting for GPS fix…" : "Location permission is off");
+            return;
+        }
+        if (map.getZoomLevelDouble() < 14) map.getController().setZoom(15.0);
+        map.getController().animateTo(new GeoPoint(l.getLatitude(), l.getLongitude()));
+    }
+
+    private void downloadArea() {
+        if (!Tiles.allowsDownload(layerIndex)) {
+            toast("Switch to a USGS layer (Map button) to download for offline use");
+            return;
+        }
+        try {
+            CacheManager cm = new CacheManager(map);
+            BoundingBox bb = map.getBoundingBox();
+            int z = (int) Math.floor(map.getZoomLevelDouble());
+            int zMin = Math.max(5, z - 3);
+            int zMax = Math.min(16, z + 3);
+            int count = cm.possibleTilesInArea(bb, zMin, zMax);
+            String size = String.format(Locale.US, "%.0f", count * 0.025); // ~25 KB per tile
+            if (count > 25000) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Area too large")
+                        .setMessage(count + " tiles. Zoom in closer and try again (limit 25,000).")
+                        .setPositiveButton("OK", null).show();
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("Download for offline")
+                    .setMessage("Save the visible area, zoom " + zMin + "–" + zMax + ".\n"
+                            + count + " tiles, about " + size + " MB.\nKeep the app open until it finishes.")
+                    .setPositiveButton("Download", (d, w) -> cm.downloadAreaAsync(this, bb, zMin, zMax))
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        } catch (Exception e) {
+            toast("This layer can't be downloaded: " + e.getMessage());
+        }
+    }
+
+    // ---------- markers ----------
+
+    private void refreshMarkers() {
+        map.getOverlays().removeAll(itemOverlays);
+        itemOverlays.clear();
+        long now = System.currentTimeMillis();
+        int insertAt = map.getOverlays().indexOf(myLocOverlay);
+        if (insertAt < 0) insertAt = map.getOverlays().size();
+
+        for (Store.Pin p : app.store.pins.values()) {
+            Marker m = new Marker(map);
+            m.setPosition(new GeoPoint(p.lat, p.lon));
+            int color = p.isMine() ? Color.parseColor("#FFFFB000") : Color.parseColor("#FF40C4FF");
+            String label = p.isMine() ? p.name : p.name + " (" + p.owner + ")";
+            m.setIcon(labelIcon(label, color, true));
+            m.setAnchor(0.5f, iconAnchorY);
+            m.setInfoWindow(null);
+            String key = "pin:" + p.id;
+            m.setOnMarkerClickListener((mk, mv) -> { pinTapped(p.id); return true; });
+            itemOverlays.add(m);
+        }
+        for (Store.Station s : app.store.stations.values()) {
+            Marker m = new Marker(map);
+            m.setPosition(new GeoPoint(s.lat, s.lon));
+            boolean stale = now - s.time > 30 * 60 * 1000L;
+            int color = stale ? Color.GRAY : Color.parseColor("#FF7CFC00");
+            m.setIcon(labelIcon(s.call, color, false));
+            m.setAnchor(0.5f, iconAnchorY);
+            m.setInfoWindow(null);
+            m.setOnMarkerClickListener((mk, mv) -> { stationTapped(s.call); return true; });
+            itemOverlays.add(m);
+        }
+        map.getOverlays().addAll(insertAt, itemOverlays);
+        refreshTarget();
+        map.invalidate();
+    }
+
+    private float iconAnchorY = 0.25f;
+
+    /** Dot or diamond with a text label under it. */
+    private Drawable labelIcon(String label, int color, boolean diamond) {
+        float d = getResources().getDisplayMetrics().density;
+        Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
+        text.setTextSize(12 * d);
+        text.setFakeBoldText(true);
+        text.setTextAlign(Paint.Align.CENTER);
+        float tw = text.measureText(label);
+        int sym = (int) (18 * d);
+        int w = (int) Math.max(sym, tw + 8 * d);
+        int h = (int) (sym * 2 + 16 * d);
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        float cx = w / 2f, cy = sym / 2f + 2 * d;
+        iconAnchorY = cy / h;
+        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fill.setColor(color);
+        Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+        edge.setColor(Color.BLACK);
+        edge.setStyle(Paint.Style.STROKE);
+        edge.setStrokeWidth(2 * d);
+        float r = sym / 2f - 2 * d;
+        if (diamond) {
+            Path path = new Path();
+            path.moveTo(cx, cy - r); path.lineTo(cx + r, cy); path.lineTo(cx, cy + r); path.lineTo(cx - r, cy); path.close();
+            c.drawPath(path, fill);
+            c.drawPath(path, edge);
+        } else {
+            c.drawCircle(cx, cy, r * 0.8f, fill);
+            c.drawCircle(cx, cy, r * 0.8f, edge);
+        }
+        float ty = sym + 12 * d;
+        Paint halo = new Paint(text);
+        halo.setStyle(Paint.Style.STROKE);
+        halo.setStrokeWidth(4 * d);
+        halo.setColor(Color.BLACK);
+        c.drawText(label, cx, ty, halo);
+        text.setColor(color);
+        c.drawText(label, cx, ty, text);
+        return new BitmapDrawable(getResources(), bmp);
+    }
+
+    // ---------- pins, stations, targets ----------
+
+    private void promptNewPin(double lat, double lon) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad / 2, pad, 0);
+        TextView grid = new TextView(this);
+        grid.setText(Mgrs.format(lat, lon));
+        grid.setTypeface(android.graphics.Typeface.MONOSPACE);
+        box.addView(grid);
+        EditText name = new EditText(this);
+        name.setHint("Name (max 9 chars to share)");
+        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        name.setText("PIN" + (app.store.pins.size() + 1));
+        name.selectAll();
+        box.addView(name);
+        android.widget.CheckBox share = new android.widget.CheckBox(this);
+        share.setText("Share with team over radio");
+        share.setChecked(app.canTransmit());
+        share.setEnabled(app.canTransmit());
+        box.addView(share);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Drop pin")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> {
+                    String n = name.getText().toString().trim();
+                    if (n.isEmpty()) n = "PIN";
+                    Store.Pin p = app.store.addMyPin(n, lat, lon);
+                    if (share.isChecked()) app.sharePin(p, true);
+                    target = "pin:" + p.id;
+                    refreshMarkers();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void pinTapped(String id) {
+        Store.Pin p = app.store.pins.get(id);
+        if (p == null) return;
+        target = "pin:" + id;
+        refreshTarget();
+        String info = Mgrs.format(p.lat, p.lon) + "\n" + rangeFromMe(p.lat, p.lon)
+                + (p.isMine() ? "" : "\nFrom " + p.owner + " · " + Geo.ago(p.time, System.currentTimeMillis()))
+                + (p.comment == null || p.comment.isEmpty() ? "" : "\n" + p.comment);
+        List<String> actions = new ArrayList<>();
+        if (p.isMine()) {
+            actions.add(p.shared ? "Re-send to team" : "Share with team");
+            actions.add("Rename");
+        }
+        actions.add("Delete");
+        new AlertDialog.Builder(this)
+                .setTitle(p.name)
+                .setMessage(info)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("More…", (d, w) -> new AlertDialog.Builder(this)
+                        .setTitle(p.name)
+                        .setItems(actions.toArray(new String[0]), (d2, which) -> {
+                            String a = actions.get(which);
+                            if (a.startsWith("Share") || a.startsWith("Re-send")) {
+                                if (requireTransmit()) {
+                                    if (app.sharePin(p, true)) toast("Sent " + p.name);
+                                }
+                            } else if (a.equals("Rename")) {
+                                renamePin(p);
+                            } else if (a.equals("Delete")) {
+                                if (p.isMine() && p.shared && app.canTransmit()) app.sharePin(p, false);
+                                app.store.removePin(p.id);
+                                if (("pin:" + p.id).equals(target)) target = null;
+                                refreshMarkers();
+                            }
+                        }).show())
+                .show();
+    }
+
+    private void renamePin(Store.Pin p) {
+        EditText name = new EditText(this);
+        name.setText(p.name);
+        new AlertDialog.Builder(this)
+                .setTitle("Rename pin")
+                .setView(name)
+                .setPositiveButton("Save", (d, w) -> {
+                    String n = name.getText().toString().trim();
+                    if (n.isEmpty()) return;
+                    boolean wasShared = p.shared;
+                    if (wasShared && app.canTransmit()) app.sharePin(p, false);
+                    p.name = n;
+                    app.store.save();
+                    if (wasShared && app.canTransmit()) app.sharePin(p, true);
+                    refreshMarkers();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void stationTapped(String call) {
+        Store.Station s = app.store.stations.get(call);
+        if (s == null) return;
+        target = "sta:" + call;
+        refreshTarget();
+        String info = Mgrs.format(s.lat, s.lon) + "\n" + rangeFromMe(s.lat, s.lon)
+                + "\nHeard " + Geo.ago(s.time, System.currentTimeMillis())
+                + (s.comment.isEmpty() ? "" : "\n" + s.comment);
+        new AlertDialog.Builder(this)
+                .setTitle(call)
+                .setMessage(info)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Message", (d, w) -> {
+                    Intent i = new Intent(this, ChatActivity.class);
+                    i.putExtra("to", call);
+                    startActivity(i);
+                })
+                .setNegativeButton("Remove", (d, w) -> {
+                    app.store.removeStation(call);
+                    if (("sta:" + call).equals(target)) target = null;
+                    refreshMarkers();
+                })
+                .show();
+    }
+
+    private String rangeFromMe(double lat, double lon) {
+        Location l = app.lastLoc;
+        if (l == null) return "Range: no GPS fix";
+        return Geo.rangeBearing(l.getLatitude(), l.getLongitude(), lat, lon, app.imperial());
+    }
+
+    private double[] targetPosition() {
+        if (target == null) return null;
+        if (target.startsWith("pin:")) {
+            Store.Pin p = app.store.pins.get(target.substring(4));
+            return p == null ? null : new double[]{p.lat, p.lon};
+        }
+        if (target.startsWith("sta:")) {
+            Store.Station s = app.store.stations.get(target.substring(4));
+            return s == null ? null : new double[]{s.lat, s.lon};
+        }
+        if (target.startsWith("pt:")) {
+            String[] parts = target.substring(3).split(",");
+            return new double[]{Double.parseDouble(parts[0]), Double.parseDouble(parts[1])};
+        }
+        return null;
+    }
+
+    private String targetName() {
+        if (target == null) return "";
+        if (target.startsWith("pin:")) {
+            Store.Pin p = app.store.pins.get(target.substring(4));
+            return p == null ? "" : p.name;
+        }
+        if (target.startsWith("sta:")) return target.substring(4);
+        return "Grid point";
+    }
+
+    private void refreshTarget() {
+        double[] t = targetPosition();
+        if (t == null) {
+            target = null;
+            targetRow.setVisibility(android.view.View.GONE);
+            rangeLine.setVisible(false);
+            map.invalidate();
+            return;
+        }
+        targetRow.setVisibility(android.view.View.VISIBLE);
+        Location l = app.lastLoc;
+        if (l != null) {
+            tvTarget.setText("▶ " + targetName() + "  " + Geo.rangeBearing(l.getLatitude(), l.getLongitude(), t[0], t[1], app.imperial()));
+            rangeLine.setPoints(Arrays.asList(new GeoPoint(l.getLatitude(), l.getLongitude()), new GeoPoint(t[0], t[1])));
+            rangeLine.setVisible(true);
+        } else {
+            tvTarget.setText("▶ " + targetName() + "  (no GPS fix)");
+            rangeLine.setVisible(false);
+        }
+        map.invalidate();
+    }
+
+    private void promptGoToGrid() {
+        EditText in = new EditText(this);
+        in.setHint("e.g. 14S PF 12345 67890");
+        in.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        IGeoPoint c = map.getMapCenter();
+        String cur = Mgrs.format(c.getLatitude(), c.getLongitude());
+        if (cur.length() > 6) in.setText(cur.substring(0, 6));
+        in.setSelection(in.getText().length());
+        new AlertDialog.Builder(this)
+                .setTitle("Go to MGRS grid")
+                .setView(in)
+                .setPositiveButton("Go", (d, w) -> {
+                    double[] ll = Mgrs.parse(in.getText().toString());
+                    if (ll == null) { toast("Not a valid MGRS grid"); return; }
+                    if (map.getZoomLevelDouble() < 13) map.getController().setZoom(14.0);
+                    map.getController().animateTo(new GeoPoint(ll[0], ll[1]));
+                    target = "pt:" + ll[0] + "," + ll[1];
+                    refreshTarget();
+                })
+                .setNeutralButton("Go + pin", (d, w) -> {
+                    double[] ll = Mgrs.parse(in.getText().toString());
+                    if (ll == null) { toast("Not a valid MGRS grid"); return; }
+                    if (map.getZoomLevelDouble() < 13) map.getController().setZoom(14.0);
+                    map.getController().animateTo(new GeoPoint(ll[0], ll[1]));
+                    promptNewPin(ll[0], ll[1]);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showList() {
+        final List<String> keys = new ArrayList<>();
+        final List<String> labels = new ArrayList<>();
+        final List<Double> dists = new ArrayList<>();
+        Location l = app.lastLoc;
+        long now = System.currentTimeMillis();
+        for (Store.Station s : app.store.stations.values()) {
+            keys.add("sta:" + s.call);
+            dists.add(l == null ? 0 : Geo.distance(l.getLatitude(), l.getLongitude(), s.lat, s.lon));
+            labels.add("● " + s.call + "  " + (l == null ? "" : Geo.rangeBearing(l.getLatitude(), l.getLongitude(), s.lat, s.lon, app.imperial()))
+                    + "  · " + Geo.ago(s.time, now));
+        }
+        for (Store.Pin p : app.store.pins.values()) {
+            keys.add("pin:" + p.id);
+            dists.add(l == null ? 0 : Geo.distance(l.getLatitude(), l.getLongitude(), p.lat, p.lon));
+            labels.add("◆ " + p.name + "  " + (l == null ? "" : Geo.rangeBearing(l.getLatitude(), l.getLongitude(), p.lat, p.lon, app.imperial())));
+        }
+        if (keys.isEmpty()) { toast("No pins or stations yet"); return; }
+        Integer[] order = new Integer[keys.size()];
+        for (int i = 0; i < order.length; i++) order[i] = i;
+        Arrays.sort(order, (a, b) -> Double.compare(dists.get(a), dists.get(b)));
+        String[] items = new String[order.length];
+        for (int i = 0; i < order.length; i++) items[i] = labels.get(order[i]);
+        new AlertDialog.Builder(this)
+                .setTitle("Team & pins (nearest first)")
+                .setItems(items, (d, which) -> {
+                    target = keys.get(order[which]);
+                    double[] t = targetPosition();
+                    if (t != null) map.getController().animateTo(new GeoPoint(t[0], t[1]));
+                    refreshTarget();
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    // ---------- menu ----------
+
+    private void showMenu() {
+        List<String> items = new ArrayList<>();
+        items.add(app.radio.getState() == RadioLink.State.OFF ? "Connect radio (UV-PRO)" : "Disconnect radio");
+        items.add("Send my position now");
+        items.add("Download this area for offline");
+        items.add("Clear heard stations");
+        items.add("Packet log");
+        items.add("Settings");
+        new AlertDialog.Builder(this)
+                .setItems(items.toArray(new String[0]), (d, which) -> {
+                    switch (which) {
+                        case 0: radioTapped(); break;
+                        case 1: if (requireTransmit()) { if (app.beaconNow()) toast("Position sent"); else toast("No GPS fix yet"); } break;
+                        case 2: downloadArea(); break;
+                        case 3: app.store.clearStations(); refreshMarkers(); break;
+                        case 4: startActivity(new Intent(this, LogActivity.class)); break;
+                        case 5: startActivity(new Intent(this, SettingsActivity.class)); break;
+                    }
+                })
+                .show();
+    }
+
+    private boolean requireTransmit() {
+        if (!app.hasCallsign()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Callsign needed")
+                    .setMessage("Sending over the radio needs your amateur callsign. Add it in Settings.")
+                    .setPositiveButton("Settings", (d, w) -> startActivity(new Intent(this, SettingsActivity.class)))
+                    .setNegativeButton("Cancel", null).show();
+            return false;
+        }
+        if (!app.radio.isConnected()) {
+            toast("Radio not connected");
+            return false;
+        }
+        return true;
+    }
+
+    // ---------- radio ----------
+
+    private void radioTapped() {
+        if (app.radio.getState() != RadioLink.State.OFF) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Radio")
+                    .setMessage(radioSummary())
+                    .setPositiveButton("Disconnect", (d, w) -> app.radio.disconnect())
+                    .setNegativeButton("Close", null).show();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BLUETOOTH_CONNECT}, REQ_BT);
+            return;
+        }
+        BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = bm == null ? null : bm.getAdapter();
+        if (adapter == null) { toast("This phone has no Bluetooth"); return; }
+        if (!adapter.isEnabled()) { toast("Turn on Bluetooth first"); return; }
+        Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+        final List<BluetoothDevice> devices = new ArrayList<>(bonded);
+        Collections.sort(devices, (a, b) -> {
+            boolean ua = looksLikeRadio(a), ub = looksLikeRadio(b);
+            if (ua != ub) return ua ? -1 : 1;
+            return safeName(a).compareToIgnoreCase(safeName(b));
+        });
+        if (devices.isEmpty()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("No paired radios")
+                    .setMessage("On the UV-PRO: Menu ▸ General Settings ▸ KISS TNC ▸ On.\n"
+                            + "Then pair it in Android Settings ▸ Bluetooth, and come back here.")
+                    .setPositiveButton("Open Bluetooth settings", (d, w) ->
+                            startActivity(new Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)))
+                    .setNegativeButton("Cancel", null).show();
+            return;
+        }
+        String[] names = new String[devices.size()];
+        for (int i = 0; i < names.length; i++) names[i] = safeName(devices.get(i)) + "\n" + devices.get(i).getAddress();
+        new AlertDialog.Builder(this)
+                .setTitle("Connect to radio")
+                .setItems(names, (d, which) -> {
+                    BluetoothDevice dev = devices.get(which);
+                    app.prefs.edit().putString("lastRadio", dev.getAddress()).apply();
+                    app.radio.connect(dev);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+        toastOnce("kissHint", "Make sure KISS TNC is ON in the UV-PRO menu (and the BTECH app is closed)");
+    }
+
+    private static boolean looksLikeRadio(BluetoothDevice d) {
+        String n = safeName(d).toUpperCase(Locale.US);
+        return n.contains("UV-PRO") || n.contains("UV PRO") || n.contains("N76") || n.contains("GA-5WB")
+                || n.contains("TNC") || n.contains("GMRS-PRO") || n.contains("UV-50");
+    }
+
+    private static String safeName(BluetoothDevice d) {
+        try {
+            String n = d.getName();
+            return n == null ? d.getAddress() : n;
+        } catch (SecurityException e) {
+            return d.getAddress();
+        }
+    }
+
+    private String radioSummary() {
+        return "State: " + app.radio.getState() + "\nDevice: " + app.radio.deviceName()
+                + "\nPackets received: " + app.radio.rxCount + "\nPackets sent: " + app.radio.txCount
+                + "\nMy callsign: " + (app.hasCallsign() ? app.myCall() : "(not set — listen only)")
+                + "\nBeacon: " + (app.beaconSeconds() == 0 ? "off" : "every " + app.beaconSeconds() / 60 + " min");
+    }
+
+    private void updateRadioStatus() {
+        RadioLink.State s = app.radio.getState();
+        String txt;
+        int color;
+        switch (s) {
+            case CONNECTED:
+                txt = "● RADIO ON · RX " + app.radio.rxCount + " · TX " + app.radio.txCount
+                        + (app.hasCallsign() ? "" : " · LISTEN ONLY");
+                color = ContextCompat.getColor(this, R.color.accent);
+                break;
+            case CONNECTING:
+                txt = "● RADIO: CONNECTING…";
+                color = ContextCompat.getColor(this, R.color.warn);
+                break;
+            case RETRYING:
+                txt = "● RADIO: RECONNECTING…";
+                color = ContextCompat.getColor(this, R.color.bad);
+                break;
+            default:
+                txt = "● RADIO: OFF (tap to connect)";
+                color = ContextCompat.getColor(this, R.color.dim);
+        }
+        radioStatus.setText(txt);
+        radioStatus.setTextColor(color);
+        int unread = app.store.unread;
+        btnChat.setText(unread > 0 ? "Chat (" + unread + ")" : "Chat");
+    }
+
+    // ---------- location ----------
+
+    private boolean hasLocationPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private final LocationListener locListener = new LocationListener() {
+        @Override public void onLocationChanged(@NonNull Location loc) { onNewLocation(loc); }
+        @Override public void onStatusChanged(String provider, int status, Bundle extras) { }
+        @Override public void onProviderEnabled(@NonNull String provider) { }
+        @Override public void onProviderDisabled(@NonNull String provider) { }
+    };
+
+    private boolean firstFix = true;
+
+    private void startLocation() {
+        if (!hasLocationPermission() || lm == null) return;
+        myLocOverlay.enableMyLocation();
+        try {
+            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000, 0, locListener);
+            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000, 0, locListener);
+            Location last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            if (last == null) last = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+            if (last != null) onNewLocation(last);
+        } catch (Exception e) {
+            toast("Location error: " + e.getMessage());
+        }
+    }
+
+    private void onNewLocation(Location loc) {
+        Location prev = app.lastLoc;
+        boolean better = prev == null
+                || loc.getTime() - prev.getTime() > 10000
+                || loc.getAccuracy() <= prev.getAccuracy()
+                || LocationManager.GPS_PROVIDER.equals(loc.getProvider());
+        if (!better) return;
+        app.lastLoc = loc;
+        tvMe.setText("YOU  " + Mgrs.format(loc.getLatitude(), loc.getLongitude())
+                + (loc.hasAccuracy() ? String.format(Locale.US, "  ±%.0f%s",
+                app.imperial() ? loc.getAccuracy() * 3.28084 : loc.getAccuracy(), app.imperial() ? "ft" : "m") : ""));
+        if (firstFix && !app.prefs.contains("mapLat")) {
+            firstFix = false;
+            map.getController().setZoom(15.0);
+            map.getController().setCenter(new GeoPoint(loc.getLatitude(), loc.getLongitude()));
+        }
+        firstFix = false;
+        updateCenterText();
+        refreshTarget();
+    }
+
+    private void updateCenterText() {
+        IGeoPoint c = map.getMapCenter();
+        String s = "CTR  " + Mgrs.format(c.getLatitude(), c.getLongitude());
+        Location l = app.lastLoc;
+        if (l != null) {
+            double dist = Geo.distance(l.getLatitude(), l.getLongitude(), c.getLatitude(), c.getLongitude());
+            if (dist > 5) s += "\n     " + Geo.rangeBearing(l.getLatitude(), l.getLongitude(), c.getLatitude(), c.getLongitude(), app.imperial());
+        }
+        tvCenter.setText(s);
+    }
+
+    // ---------- lifecycle ----------
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (requestCode == REQ_LOCATION && hasLocationPermission()) startLocation();
+        if (requestCode == REQ_BT) {
+            if (granted) radioTapped();
+            else toast("Bluetooth permission is needed to talk to the radio");
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        map.onResume();
+        app.addListener(this);
+        if (app.prefs.getBoolean("keepOn", false)) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        refreshMarkers();
+        updateRadioStatus();
+        updateCenterText();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        map.onPause();
+        app.removeListener(this);
+        IGeoPoint c = map.getMapCenter();
+        app.prefs.edit()
+                .putLong("mapLat", Double.doubleToLongBits(c.getLatitude()))
+                .putLong("mapLon", Double.doubleToLongBits(c.getLongitude()))
+                .putLong("mapZoom", Double.doubleToLongBits(map.getZoomLevelDouble()))
+                .apply();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (lm != null) lm.removeUpdates(locListener);
+    }
+
+    @Override public void onDataChanged() { refreshMarkers(); updateRadioStatus(); }
+    @Override public void onRadioChanged() { updateRadioStatus(); }
+
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
+
+    private void toastOnce(String key, String s) {
+        if (app.prefs.getBoolean("hint_" + key, false)) return;
+        app.prefs.edit().putBoolean("hint_" + key, true).apply();
+        toast(s);
+    }
+}
