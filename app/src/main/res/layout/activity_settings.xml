@@ -61,6 +61,12 @@
         <TextView style="@style/SettingsHeader" android:layout_marginTop="28dp" android:text="◆ BACKGROUND &amp; ALERTS" />
         <CheckBox android:id="@+id/setBackground" style="@style/HudCheck"
             android:text="Keep radios connected with the screen off" />
+        <CheckBox android:id="@+id/setAutoConnect" style="@style/HudCheck"
+            android:text="Reconnect my radios when the app opens" />
+        <CheckBox android:id="@+id/setAlertSos" style="@style/HudCheck"
+            android:text="SOS alarm: loud, even with the ringer silenced" />
+        <CheckBox android:id="@+id/setWeather" style="@style/HudCheck"
+            android:text="Severe weather warnings (needs internet)" />
         <CheckBox android:id="@+id/setAlertMsg" style="@style/HudCheck"
             android:text="Alert on new messages" />
         <CheckBox android:id="@+id/setAlertWpt" style="@style/HudCheck"
@@ -74,8 +80,10 @@
         <TextView style="@style/SettingsLabel" android:text="// Map detail" />
         <Spinner android:id="@+id/setDetail" android:layout_width="match_parent" android:layout_height="48dp" android:background="@drawable/hud_field" />
 
+        <CheckBox android:id="@+id/setTrails" style="@style/HudCheck"
+            android:layout_marginTop="12dp" android:text="Record and show trails (mine and teammates')" />
         <CheckBox android:id="@+id/setImperial" style="@style/HudCheck"
-            android:layout_marginTop="12dp" android:text="Imperial units (mi / ft)" />
+            android:text="Imperial units (mi / ft)" />
         <CheckBox android:id="@+id/setKeepOn" style="@style/HudCheck" android:text="Keep screen on" />
 
         <Button android:id="@+id/setSave" style="@style/HudBigButton" android:layout_width="match_parent" android:layout_height="wrap_content"

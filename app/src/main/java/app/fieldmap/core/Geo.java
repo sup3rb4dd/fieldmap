@@ -51,6 +51,26 @@ public final class Geo {
         return String.format(Locale.US, "%s @ %03.0f° %s", formatDistance(d, imperial), b, cardinal(b));
     }
 
+    /** Signed smallest turn from heading to bearing, -180..180 (positive = turn right). */
+    public static double turn(double bearing, double heading) {
+        return ((bearing - heading) % 360 + 540) % 360 - 180;
+    }
+
+    public static String formatSpeed(double mps, boolean imperial) {
+        return imperial ? String.format(Locale.US, "%.1f MPH", mps * 2.236936)
+                : String.format(Locale.US, "%.1f KM/H", mps * 3.6);
+    }
+
+    /** "<1 MIN", "12 MIN", "1H 05M"; "--" when not moving or absurdly far. */
+    public static String formatEta(double meters, double mps) {
+        if (mps < 0.3) return "--";
+        long s = Math.round(meters / mps);
+        if (s < 60) return "<1 MIN";
+        if (s < 3600) return (s / 60) + " MIN";
+        if (s > 99 * 3600) return "--";
+        return String.format(Locale.US, "%dH %02dM", s / 3600, (s % 3600) / 60);
+    }
+
     public static String ago(long thenMs, long nowMs) {
         long s = Math.max(0, (nowMs - thenMs) / 1000);
         if (s < 60) return s + "s ago";

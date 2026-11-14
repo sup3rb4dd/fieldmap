@@ -18,6 +18,8 @@ import app.fieldmap.core.Aprs;
 import app.fieldmap.core.Ax25;
 import app.fieldmap.core.Kiss;
 import app.fieldmap.core.Mesh;
+import app.fieldmap.core.Tac;
+import app.fieldmap.core.Trail;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -29,6 +31,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public interface Listener {
         void onDataChanged();
         void onRadioChanged();
+        default void onLocation(Location loc) { }
     }
 
     private static FieldMapApp instance;
@@ -48,6 +51,18 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     private final Random rnd = new Random();
     private long lastMeshBeacon = 0;
     public volatile boolean serviceRunning = false;
+    public Trail trail;
+    public Weather weather;
+    /** True while the map screen is on top. */
+    public boolean mapVisible = false;
+    private boolean autoTried = false;
+
+    // SOS: mine, and those heard from teammates (station key -> last time heard)
+    public boolean sosActive = false;
+    private long sosStarted = 0;
+    private boolean sosLogged = false;
+    public final Map<String, Long> sosFrom = new HashMap<>();
+    private static final long SOS_REPEAT_MS = 2 * 60_000L, SOS_MAX_MS = 60 * 60_000L;
     private final long sessionStart = System.currentTimeMillis();
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -67,6 +82,9 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         msgCounter = prefs.getInt("msgCounter", 1);
         store.pruneStations(24 * 3600 * 1000L);
         Alerts.createChannels(this);
+        trail = new Trail(new java.io.File(getFilesDir(), "track.csv"));
+        trail.load();
+        weather = new Weather(this);
         main.postDelayed(overdueTask, 60_000);
     }
 
@@ -104,9 +122,73 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     private final Runnable overdueTask = new Runnable() {
         @Override public void run() {
             Alerts.checkOverdue(FieldMapApp.this, sessionStart);
+            pollWeather(false);
             main.postDelayed(this, 60_000);
         }
     };
+
+    // ---------- location ----------
+
+    /** Every GPS fix, from the map screen or the background service, comes through here. */
+    public void onLocation(Location l) {
+        Location prev = lastLoc;
+        boolean better = prev == null
+                || l.getTime() - prev.getTime() > 10000
+                || l.getAccuracy() <= prev.getAccuracy()
+                || android.location.LocationManager.GPS_PROVIDER.equals(l.getProvider());
+        if (!better) return;
+        lastLoc = l;
+        if (prefs.getBoolean("trails", true) && l.hasAccuracy()
+                && android.location.LocationManager.GPS_PROVIDER.equals(l.getProvider())) {
+            trail.add(l.getLatitude(), l.getLongitude(), l.hasAltitude() ? l.getAltitude() : Double.NaN,
+                    l.getTime(), l.getAccuracy());
+        }
+        if (weather.lastTry == 0) pollWeather(false);
+        for (Listener x : listeners) x.onLocation(l);
+    }
+
+    // ---------- weather ----------
+
+    /** Checks NWS alerts at most every 5 minutes (sooner when forced) while the app is in use. */
+    public void pollWeather(boolean force) {
+        if (!prefs.getBoolean("weather", true)) return;
+        Location l = lastLoc;
+        if (l == null || !(mapVisible || serviceRunning)) return;
+        long since = System.currentTimeMillis() - weather.lastTry;
+        if (since < (force ? 30_000L : 5 * 60_000L)) return;
+        weather.refresh(l.getLatitude(), l.getLongitude(), this::notifyData);
+    }
+
+    // ---------- auto-reconnect ----------
+
+    /** Reconnects the radios used last time. Gives up after a minute if they are not around. */
+    @android.annotation.SuppressLint("MissingPermission")
+    public void autoConnect() {
+        if (autoTried) return;
+        autoTried = true;
+        if (!prefs.getBoolean("autoConnect", true)) return;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 31 && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+            android.bluetooth.BluetoothManager bm =
+                    (android.bluetooth.BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+            android.bluetooth.BluetoothAdapter a = bm == null ? null : bm.getAdapter();
+            if (a == null || !a.isEnabled()) return;
+            String ra = prefs.getString("lastRadio", ""), ma = prefs.getString("lastMesh", "");
+            if (prefs.getBoolean("wantAprs", false) && android.bluetooth.BluetoothAdapter.checkBluetoothAddress(ra)
+                    && radio.getState() == RadioLink.State.OFF) {
+                log("Auto-connect UV-PRO " + ra);
+                radio.connect(a.getRemoteDevice(ra), 60_000L);
+            }
+            if (prefs.getBoolean("wantMesh", false) && android.bluetooth.BluetoothAdapter.checkBluetoothAddress(ma)
+                    && mesh.getState() == RadioLink.State.OFF) {
+                log("Auto-connect Meshtastic " + ma);
+                mesh.connect(a.getRemoteDevice(ma), 60_000L);
+            }
+        } catch (Exception e) {
+            log("Auto-connect failed: " + e.getMessage());
+        }
+    }
 
     /** Starts/stops the background service to match settings and radio state. */
     public void updateService() {
@@ -272,6 +354,133 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         return myNodeNum != 0 ? Mesh.nodeId(myNodeNum) : "me";
     }
 
+    /** Name other people see in SOS and check-in texts. */
+    public String myName() {
+        String n = myNodeNum != 0 ? nodeNames.get(myNodeNum) : null;
+        if (n != null && !n.isEmpty()) return n;
+        return hasCallsign() ? callsign() : "FIELDMAP";
+    }
+
+    // ---------- check-in and SOS ----------
+
+    public boolean checkIn() {
+        Location l = lastLoc;
+        return sendMessage(group(), Tac.checkIn("OK",
+                l == null ? Double.NaN : l.getLatitude(), l == null ? Double.NaN : l.getLongitude()));
+    }
+
+    /** Which links an SOS would go out on right now, for the confirmation screen. Empty = none. */
+    public String sosLinks() {
+        String s = "";
+        if (mesh.isConnected()) s = "MESHTASTIC (team channel " + meshChannel() + ", encrypted)";
+        if (canTransmit()) s += (s.isEmpty() ? "" : "\n") + "APRS (public — anyone listening can read it)";
+        return s;
+    }
+
+    public boolean startSos() {
+        if (!mesh.isConnected() && !canTransmit()) return false;
+        sosActive = true;
+        sosStarted = System.currentTimeMillis();
+        sosLogged = false;
+        main.removeCallbacks(sosTask);
+        main.post(sosTask);
+        return true;
+    }
+
+    public void cancelSos() {
+        if (!sosActive) return;
+        sosActive = false;
+        main.removeCallbacks(sosTask);
+        String text = Tac.sosCancel(myName());
+        String via = sendEmergency(text);
+        if (!via.isEmpty()) store.addMessage(myLabel(), group(), text, null, true, via);
+        log("SOS cancelled");
+        notifyData();
+    }
+
+    /** An emergency goes out on everything that can transmit, including APRS. */
+    private String sendEmergency(String text) {
+        String via = "";
+        if (mesh.isConnected() && mesh.send(Mesh.text(Mesh.BROADCAST, meshChannel(), text, newPacketId()))) via = "MESH";
+        if (canTransmit() && sendInfo(Aprs.message(group(), text, null))) via = via.isEmpty() ? "APRS" : "APRS+" + via;
+        return via;
+    }
+
+    private final Runnable sosTask = new Runnable() {
+        @Override public void run() {
+            if (!sosActive) return;
+            if (System.currentTimeMillis() - sosStarted > SOS_MAX_MS) {
+                sosActive = false;
+                log("SOS stopped repeating after 60 minutes");
+                notifyData();
+                return;
+            }
+            Location l = lastLoc;
+            String text = Tac.sos(myName(), l == null ? Double.NaN : l.getLatitude(), l == null ? Double.NaN : l.getLongitude());
+            String via = sendEmergency(text);
+            log("SOS sent via " + (via.isEmpty() ? "NOTHING (no radio connected)" : via));
+            if (!via.isEmpty() && !sosLogged) {
+                sosLogged = true;
+                store.addMessage(myLabel(), group(), text, null, true, via);
+            }
+            if (l != null && mesh.isConnected()) meshBeacon();
+            notifyData();
+            main.postDelayed(this, SOS_REPEAT_MS);
+        }
+    };
+
+    public boolean isSos(String key) {
+        Long t = sosFrom.get(key);
+        return t != null && System.currentTimeMillis() - t < SOS_MAX_MS;
+    }
+
+    /** A teammate's SOS that is still live (heard in the last hour), or null. Returns the station key. */
+    public String activeSosFrom() {
+        long now = System.currentTimeMillis();
+        String best = null;
+        for (Map.Entry<String, Long> e : sosFrom.entrySet()) {
+            if (now - e.getValue() > SOS_MAX_MS) continue;
+            if (best == null || e.getValue() > sosFrom.get(best)) best = e.getKey();
+        }
+        return best;
+    }
+
+    /**
+     * Looks at team text for SOS / check-in / SOS-cancel. Returns true if it raised its own
+     * alert, so the ordinary message alert can be skipped.
+     */
+    private boolean inspectText(String fromKey, String via, String text) {
+        boolean sos = Tac.isSos(text), cancel = Tac.isSosCancel(text), chk = Tac.isCheckIn(text);
+        if (!sos && !cancel && !chk) return false;
+        long now = System.currentTimeMillis();
+        double[] g = Tac.findGrid(text);
+        if (g != null && (sos || chk)) {
+            Store.Station old = store.stations.get(fromKey);
+            store.upsertStation(fromKey, g[0], g[1], old == null ? '/' : old.table, old == null ? '[' : old.code,
+                    old == null ? "" : old.comment, via, old == null ? nodeNameFor(fromKey) : old.name, now);
+        }
+        Store.Station s = store.stations.get(fromKey);
+        if (chk && s != null) { s.checkTime = now; store.save(); }
+        if (cancel) {
+            if (sosFrom.remove(fromKey) != null) Alerts.sosCleared(this, displayName(fromKey));
+            return true;
+        }
+        if (sos) {
+            Long last = sosFrom.put(fromKey, now);
+            // repeats every 2 minutes refresh the position quietly; only the first one sounds the alarm
+            if (last == null || now - last > 10 * 60_000L) Alerts.sos(this, displayName(fromKey), text);
+            return true;
+        }
+        return false;
+    }
+
+    private String nodeNameFor(String key) {
+        if (key != null && key.startsWith("!")) {
+            try { return nodeNames.get((int) Long.parseLong(key.substring(1), 16)); } catch (NumberFormatException ignored) { }
+        }
+        return null;
+    }
+
     private boolean sendMeshDirect(String nodeId, String text) {
         if (!mesh.isConnected()) { log("TX blocked: Meshtastic not connected"); return false; }
         int num;
@@ -322,6 +531,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     @Override
     public void onRadioState(RadioLink.State state, String detail) {
         log("Radio " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
+        if (state == RadioLink.State.OFF && "LOST".equals(detail) && !mapVisible) Alerts.commsLost(this, "UV-PRO");
         if (state == RadioLink.State.CONNECTED) {
             main.postDelayed(() -> {
                 if (canTransmit() && aprsPosition() && beaconSeconds() > 0) {
@@ -346,6 +556,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     @Override
     public void onMeshState(RadioLink.State state, String detail) {
         log("Mesh " + state + (detail.isEmpty() ? "" : " (" + detail + ")"));
+        if (state == RadioLink.State.OFF && "LOST".equals(detail) && !mapVisible) Alerts.commsLost(this, "MESHTASTIC");
         if (state == RadioLink.State.CONNECTED) lastMeshBeacon = 0;
         restartBeaconTask();
         updateService();
@@ -408,8 +619,10 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                     break;
                 }
                 log("MESH RX text " + displayName(fromId) + ": " + e.text);
-                store.addMessage(fromId, broadcast ? group() : myLabel(), e.text, null, false, "MESH");
-                Alerts.message(this, displayName(fromId), e.text, !broadcast);
+                // an SOS repeats every 2 minutes: keep one line in chat, not thirty
+                boolean sosRepeat = Tac.isSos(e.text) && isSos(fromId);
+                if (!sosRepeat) store.addMessage(fromId, broadcast ? group() : myLabel(), e.text, null, false, "MESH");
+                if (!inspectText(fromId, "MESH", e.text)) Alerts.message(this, displayName(fromId), e.text, !broadcast);
                 notifyData();
                 break;
             }
@@ -492,8 +705,9 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
             sendInfo(Aprs.ack(p.source, p.msgId));
         }
         if (store.isDuplicate(p.source, p.msgText, p.msgId)) return;
-        store.addMessage(p.source, to.toUpperCase(Locale.US), p.msgText, p.msgId, false);
-        Alerts.message(this, p.source, p.msgText, toMe);
+        boolean sosRepeat = Tac.isSos(p.msgText) && isSos(p.source);
+        if (!sosRepeat) store.addMessage(p.source, to.toUpperCase(Locale.US), p.msgText, p.msgId, false);
+        if (!inspectText(p.source, "APRS", p.msgText)) Alerts.message(this, p.source, p.msgText, toMe);
         notifyData();
     }
 

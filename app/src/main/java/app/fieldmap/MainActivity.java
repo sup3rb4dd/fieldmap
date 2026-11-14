@@ -68,6 +68,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import app.fieldmap.core.Geo;
+import app.fieldmap.core.Gpx;
 import app.fieldmap.core.Mesh;
 import app.fieldmap.core.Mgrs;
 
@@ -75,6 +76,7 @@ import app.fieldmap.core.Mgrs;
 public class MainActivity extends AppCompatActivity implements FieldMapApp.Listener {
 
     private static final int REQ_LOCATION = 1, REQ_BT = 2, REQ_MESH = 3;
+    private static final int REQ_BACKUP = 21, REQ_RESTORE = 22, REQ_GPX = 23;
 
     private FieldMapApp app;
     private MapView map;
@@ -86,6 +88,18 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private Button btnChat;
     private LocationManager lm;
     private int layerIndex;
+
+    private ScaleBarOverlay scale;
+    private Polyline trailLine;
+    private int trailDrawn = 0;
+    private final List<Overlay> wxOverlays = new ArrayList<>();
+    private String wxDrawn = "";
+    private Compass compass;
+    private ArrowView navArrow;
+    private TextView tvSos, tvWx, tvHdg;
+    private Button btnSos, btnNorth;
+    private float heading = Float.NaN;
+    private boolean headingUp = false;
 
     // selected target: "pin:<id>" or "sta:<call>" or "pt:<lat>,<lon>"
     private String target;
@@ -124,8 +138,30 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         });
         findViewById(R.id.btnGrid).setOnClickListener(v -> promptGoToGrid());
         findViewById(R.id.btnLayer).setOnClickListener(v -> chooseLayer());
-        findViewById(R.id.btnNorth).setOnClickListener(v -> map.setMapOrientation(0));
         tvClock = findViewById(R.id.tvClock);
+        navArrow = findViewById(R.id.navArrow);
+        tvSos = findViewById(R.id.tvSos);
+        tvWx = findViewById(R.id.tvWx);
+        tvHdg = findViewById(R.id.tvHdg);
+        btnSos = findViewById(R.id.btnSos);
+        btnNorth = findViewById(R.id.btnNorth);
+        btnNorth.setOnClickListener(v -> {
+            setHeadingUp(false);
+            map.setMapOrientation(0);
+            toastOnce("hdgUp", "Hold N↑ to make the map turn with you");
+        });
+        btnNorth.setOnLongClickListener(v -> { setHeadingUp(!headingUp); return true; });
+        btnSos.setOnClickListener(v -> sosTapped());
+        tvSos.setOnClickListener(v -> sosBannerTapped());
+        tvWx.setOnClickListener(v -> showWeather(app.weather.top()));
+        compass = new Compass(this, this::onHeading);
+        // keep the scale bar just under the top panel, however tall the banners make it
+        findViewById(R.id.topBox).addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> {
+            if (b != ob && scale != null) {
+                scale.setScaleBarOffset(30, b + (int) (10 * getResources().getDisplayMetrics().density));
+                map.invalidate();
+            }
+        });
 
         findViewById(R.id.btnClearTarget).setOnClickListener(v -> { target = null; refreshTarget(); });
         btnChat.setOnClickListener(v -> startActivity(new Intent(this, ChatActivity.class)));
@@ -150,7 +186,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     .setTitle("◆ FIELDMAP // BRIEFING")
                     .setMessage("• Long-press the map to drop a pin.\n"
                             + "• Tap any pin or station to get range and bearing.\n"
-                            + "• Use Map ▸ ☰ ▸ Download this area to save maps for offline use.\n\n"
+                            + "• ≡ ▸ Download this area saves maps for offline use.\n"
+                            + "• SOS (red button) alerts your team with your grid.\n\n"
                             + "Tap RADIO at the top to connect a UV-PRO (APRS) and/or a Meshtastic radio like the Heltec V4.\n\n"
                             + "UV-PRO: turn on Menu ▸ General Settings ▸ KISS TNC and pair it in Android Bluetooth settings first. "
                             + "APRS transmit needs your callsign in Settings.\n\n"
@@ -159,6 +196,28 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     .setNegativeButton("Later", null)
                     .show();
         }
+
+        app.autoConnect();
+        handleIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    /** "Show on map" from chat: jump to a grid and track it. */
+    private void handleIntent(Intent i) {
+        if (i == null || !i.hasExtra("gotoLat")) return;
+        double lat = i.getDoubleExtra("gotoLat", 0), lon = i.getDoubleExtra("gotoLon", 0);
+        String name = i.getStringExtra("gotoName");
+        i.removeExtra("gotoLat");
+        if (map.getZoomLevelDouble() < 13) map.getController().setZoom(15.0);
+        map.getController().setCenter(new GeoPoint(lat, lon));
+        target = "pt:" + lat + "," + lon + "," + (name == null ? "" : name.replace(",", " "));
+        refreshTarget();
     }
 
     // ---------- map ----------
@@ -191,9 +250,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         rot.setEnabled(true);
         map.getOverlays().add(rot);
 
-        ScaleBarOverlay scale = new ScaleBarOverlay(map);
+        scale = new ScaleBarOverlay(map);
         scale.setAlignBottom(false);
-        scale.setScaleBarOffset(30, (int) (90 * getResources().getDisplayMetrics().density));
+        scale.setScaleBarOffset(30, (int) (108 * getResources().getDisplayMetrics().density));
         scale.setUnitsOfMeasure(app.imperial() ? ScaleBarOverlay.UnitsOfMeasure.imperial : ScaleBarOverlay.UnitsOfMeasure.metric);
         scale.getBarPaint().setColor(Color.parseColor("#FF39FF14"));
         scale.getBarPaint().setStrokeWidth(3 * getResources().getDisplayMetrics().density);
@@ -202,8 +261,14 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         scale.getTextPaint().setShadowLayer(4, 0, 0, Color.BLACK);
         map.getOverlays().add(scale);
 
-        rangeLine = new Polyline();
         float dd = getResources().getDisplayMetrics().density;
+        trailLine = new Polyline();
+        trailLine.getOutlinePaint().setColor(Color.parseColor("#B339FF14"));
+        trailLine.getOutlinePaint().setStrokeWidth(2f * dd);
+        trailLine.setInfoWindow(null);
+        map.getOverlays().add(trailLine);
+
+        rangeLine = new Polyline();
         rangeLine.getOutlinePaint().setColor(Color.parseColor("#FFFFB000"));
         rangeLine.getOutlinePaint().setStrokeWidth(2.5f * dd);
         rangeLine.getOutlinePaint().setPathEffect(new android.graphics.DashPathEffect(new float[]{10 * dd, 6 * dd}, 0));
@@ -342,6 +407,389 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         }
     }
 
+    // ---------- compass and steering ----------
+
+    private void onHeading(float h) {
+        heading = h;
+        tvHdg.setText(String.format(Locale.US, "HDG %03.0f°", h));
+        if (headingUp) map.setMapOrientation(-h);
+        updateArrow();
+    }
+
+    private void setHeadingUp(boolean on) {
+        if (on && !compass.available()) {
+            toast("This phone has no compass sensor");
+            return;
+        }
+        boolean was = headingUp;
+        headingUp = on;
+        btnNorth.setText(on ? "HDG↑" : "N↑");
+        if (was && !on) map.setMapOrientation(0);
+    }
+
+    /** Points the steering arrow at the tracked target, relative to the top of the phone. */
+    private void updateArrow() {
+        double[] t = targetPosition();
+        Location l = app.lastLoc;
+        if (t == null || l == null) { navArrow.setInactive(); return; }
+        double hdg;
+        if (!Float.isNaN(heading)) hdg = heading;
+        else if (l.hasBearing() && l.hasSpeed() && l.getSpeed() > 1.5f) hdg = l.getBearing();
+        else { navArrow.setInactive(); return; }
+        navArrow.setAngle((float) Geo.turn(Geo.bearing(l.getLatitude(), l.getLongitude(), t[0], t[1]), hdg));
+    }
+
+    // ---------- my trail ----------
+
+    private void syncTrail() {
+        boolean on = app.prefs.getBoolean("trails", true);
+        trailLine.setVisible(on);
+        if (!on) return;
+        int n = app.trail.size();
+        if (n == trailDrawn && n > 0) return;
+        if (n < trailDrawn || trailDrawn == 0 || n - trailDrawn > 50) {
+            // first draw, cleared, trimmed, or far behind: rebuild (thinned out if very long)
+            List<double[]> pts = app.trail.copy();
+            int step = Math.max(1, pts.size() / 3000);
+            List<GeoPoint> gp = new ArrayList<>();
+            for (int i = 0; i < pts.size(); i += step) gp.add(new GeoPoint(pts.get(i)[0], pts.get(i)[1]));
+            if (!pts.isEmpty() && (pts.size() - 1) % step != 0)
+                gp.add(new GeoPoint(pts.get(pts.size() - 1)[0], pts.get(pts.size() - 1)[1]));
+            trailLine.setPoints(gp);
+            n = pts.size();
+        } else {
+            for (int i = trailDrawn; i < n; i++) {
+                double[] p = app.trail.get(i);
+                trailLine.addPoint(new GeoPoint(p[0], p[1]));
+            }
+        }
+        trailDrawn = n;
+        map.invalidate();
+    }
+
+    private void trailMenu() {
+        int n = app.trail.size();
+        String title = "// MY TRAIL · " + n + " PTS · " + Geo.formatDistance(app.trail.length(), app.imperial()).toUpperCase(Locale.US);
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setItems(new String[]{"Export as GPX file (with my waypoints)", "Clear my trail"}, (d, which) -> {
+                    if (which == 0) {
+                        String day = new java.text.SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new java.util.Date());
+                        pickFile(Intent.ACTION_CREATE_DOCUMENT, "application/gpx+xml", "fieldmap-" + day + ".gpx", REQ_GPX);
+                    } else {
+                        new AlertDialog.Builder(this)
+                                .setTitle("// CLEAR TRAIL?")
+                                .setMessage("Deletes all " + n + " recorded points from this phone.")
+                                .setPositiveButton("Clear", (d2, w) -> { app.trail.clear(); trailDrawn = 0; syncTrail(); })
+                                .setNegativeButton("Cancel", null).show();
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    // ---------- files: GPX export, backup, restore ----------
+
+    private void pickFile(String action, String mime, String name, int req) {
+        try {
+            Intent i = new Intent(action).addCategory(Intent.CATEGORY_OPENABLE).setType(mime);
+            if (name != null) i.putExtra(Intent.EXTRA_TITLE, name);
+            startActivityForResult(i, req);
+        } catch (Exception e) {
+            toast("No file picker available on this phone");
+        }
+    }
+
+    private void backupMenu() {
+        new AlertDialog.Builder(this)
+                .setTitle("// BACKUP / RESTORE")
+                .setItems(new String[]{"Save a backup file (places, waypoints, settings)", "Restore from a backup file"}, (d, which) -> {
+                    if (which == 0) {
+                        String day = new java.text.SimpleDateFormat("yyyyMMdd", Locale.US).format(new java.util.Date());
+                        pickFile(Intent.ACTION_CREATE_DOCUMENT, "application/json", "fieldmap-backup-" + day + ".json", REQ_BACKUP);
+                    } else {
+                        pickFile(Intent.ACTION_OPEN_DOCUMENT, "*/*", null, REQ_RESTORE);
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private static final List<String> BACKUP_SKIP = Arrays.asList(
+            "mapLat", "mapLon", "mapZoom", "introShown", "askedNotif", "msgCounter",
+            "lastRadio", "lastMesh", "wantAprs", "wantMesh");
+
+    private String backupJson() throws Exception {
+        org.json.JSONObject root = new org.json.JSONObject();
+        root.put("app", "FieldMap");
+        root.put("version", 1);
+        root.put("exported", System.currentTimeMillis());
+        org.json.JSONObject st = new org.json.JSONObject();
+        for (java.util.Map.Entry<String, ?> e : app.prefs.getAll().entrySet()) {
+            String k = e.getKey();
+            Object v = e.getValue();
+            if (BACKUP_SKIP.contains(k) || k.startsWith("hint_")) continue;
+            if (v instanceof Boolean || v instanceof Integer || v instanceof String) st.put(k, v);
+        }
+        root.put("settings", st);
+        root.put("pins", app.store.exportMyPins());
+        return root.toString(2);
+    }
+
+    private void restoreFrom(String json) throws Exception {
+        final org.json.JSONObject root = new org.json.JSONObject(json);
+        if (!"FieldMap".equals(root.optString("app"))) { toast("That isn't a FieldMap backup file"); return; }
+        final org.json.JSONArray pins = root.optJSONArray("pins");
+        int n = pins == null ? 0 : pins.length();
+        new AlertDialog.Builder(this)
+                .setTitle("// RESTORE")
+                .setItems(new String[]{"Places & waypoints only (" + n + ")", "Everything, including settings and callsign"}, (d, which) -> {
+                    if (which == 1) {
+                        org.json.JSONObject st = root.optJSONObject("settings");
+                        android.content.SharedPreferences.Editor ed = app.prefs.edit();
+                        for (java.util.Iterator<String> it = st == null ? null : st.keys(); it != null && it.hasNext(); ) {
+                            String k = it.next();
+                            Object v = st.opt(k);
+                            if (BACKUP_SKIP.contains(k)) continue;
+                            if (v instanceof Boolean) ed.putBoolean(k, (Boolean) v);
+                            else if (v instanceof Integer) ed.putInt(k, (Integer) v);
+                            else if (v instanceof String) ed.putString(k, (String) v);
+                        }
+                        ed.apply();
+                    }
+                    int got = app.store.importPins(pins);
+                    toast("Restored " + got + " places and waypoints" + (which == 1 ? " plus settings" : ""));
+                    applyDetail();
+                    app.updateService();
+                    refreshMarkers();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String gpxText() {
+        List<String> names = new ArrayList<>();
+        List<double[]> wpts = new ArrayList<>();
+        for (Store.Pin p : app.store.pins.values()) {
+            if (!p.isMine()) continue;
+            names.add(p.name);
+            wpts.add(new double[]{p.lat, p.lon});
+        }
+        return Gpx.build("FieldMap trail", app.trail.copy(), names, wpts);
+    }
+
+    private void writeText(android.net.Uri uri, String text) throws Exception {
+        java.io.OutputStream out;
+        try {
+            out = getContentResolver().openOutputStream(uri, "wt");
+        } catch (Exception e) {
+            out = getContentResolver().openOutputStream(uri);
+        }
+        if (out == null) throw new java.io.IOException("could not open the file");
+        try {
+            out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } finally {
+            out.close();
+        }
+    }
+
+    private String readText(android.net.Uri uri) throws Exception {
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new java.io.IOException("could not open the file");
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int k;
+            while ((k = in.read(buf)) > 0) {
+                bo.write(buf, 0, k);
+                if (bo.size() > 5_000_000) throw new java.io.IOException("file too large");
+            }
+            return bo.toString("UTF-8");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        try {
+            if (requestCode == REQ_GPX) { writeText(data.getData(), gpxText()); toast("Trail saved"); }
+            else if (requestCode == REQ_BACKUP) { writeText(data.getData(), backupJson()); toast("Backup saved"); }
+            else if (requestCode == REQ_RESTORE) restoreFrom(readText(data.getData()));
+        } catch (Exception e) {
+            toast("File problem: " + e.getMessage());
+        }
+    }
+
+    // ---------- SOS ----------
+
+    private void sosTapped() {
+        if (app.sosActive) {
+            new AlertDialog.Builder(this)
+                    .setTitle("// YOUR SOS IS ACTIVE")
+                    .setMessage("It repeats every 2 minutes with your current grid, for up to an hour.")
+                    .setPositiveButton("Send all-clear & stop", (d, w) -> { app.cancelSos(); updateBanners(); })
+                    .setNegativeButton("Keep sending", null)
+                    .show();
+            return;
+        }
+        String links = app.sosLinks();
+        if (links.isEmpty()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("// NO RADIO CONNECTED")
+                    .setMessage("SOS goes out over your radios, and none is connected"
+                            + (app.radio.isConnected() ? " that can transmit (APRS needs your callsign in Settings)" : "")
+                            + ".\n\nIf you have phone service, call 911.")
+                    .setPositiveButton("Connect a radio", (d, w) -> radioTapped())
+                    .setNegativeButton("Close", null)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("// SEND SOS?")
+                .setMessage("Sends *SOS* with your name and grid to your team now, then every 2 minutes until you cancel (1 hour at most). "
+                        + "Their phones sound an alarm and show you in red.\n\nGoes out on:\n" + links
+                        + (app.lastLoc == null ? "\n\nNo GPS fix yet: it goes without a position until one arrives." : "")
+                        + "\n\nThis reaches your team's radios only. It does not call 911.")
+                .setPositiveButton("SEND SOS", (d, w) -> {
+                    if (!app.startSos()) toast("No radio connected");
+                    updateBanners();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void sosBannerTapped() {
+        androidx.core.app.NotificationManagerCompat.from(this).cancel(Alerts.ID_SOS);
+        String key = app.activeSosFrom();
+        if (key == null) { if (app.sosActive) sosTapped(); return; }
+        Store.Station s = app.store.stations.get(key);
+        if (s == null) { toast("No position received from " + app.displayName(key) + " yet"); return; }
+        target = "sta:" + key;
+        if (map.getZoomLevelDouble() < 13) map.getController().setZoom(15.0);
+        map.getController().animateTo(new GeoPoint(s.lat, s.lon));
+        refreshTarget();
+    }
+
+    private static android.graphics.drawable.Drawable frame(int stroke, int fill, float density) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(fill);
+        g.setStroke((int) (2 * density), stroke);
+        return g;
+    }
+
+    /** SOS and weather banners under the top panel. Runs every second so the SOS one can flash. */
+    private void updateBanners() {
+        long now = System.currentTimeMillis();
+        float dd = getResources().getDisplayMetrics().density;
+        boolean flash = (now / 700) % 2 == 0;
+        int red = 0xFFFF3B30, black = 0xF0000000;
+        String key = app.activeSosFrom();
+        String sosText = null;
+        if (key != null) {
+            Store.Station s = app.store.stations.get(key);
+            Location l = app.lastLoc;
+            Long heard = app.sosFrom.get(key);
+            sosText = "▲ SOS · " + app.displayName(key).toUpperCase(Locale.US)
+                    + (heard == null ? "" : " · " + Geo.ago(heard, now).toUpperCase(Locale.US)) + "\n"
+                    + (s == null ? "NO POSITION RECEIVED YET"
+                    : (l == null ? Mgrs.format(s.lat, s.lon) : rngBrg(l.getLatitude(), l.getLongitude(), s.lat, s.lon)) + " · TAP TO TRACK");
+        } else if (app.sosActive) {
+            sosText = "▲ YOUR SOS IS TRANSMITTING\nTAP TO SEND ALL-CLEAR";
+        }
+        if (sosText == null) {
+            tvSos.setVisibility(android.view.View.GONE);
+        } else {
+            tvSos.setText(sosText);
+            tvSos.setTextColor(flash ? Color.BLACK : red);
+            tvSos.setBackground(frame(red, flash ? red : black, dd));
+            tvSos.setVisibility(android.view.View.VISIBLE);
+        }
+        btnSos.setText(app.sosActive ? "SOS●" : "SOS");
+
+        Weather.Alert a = app.prefs.getBoolean("weather", true) ? app.weather.top() : null;
+        if (a == null) {
+            tvWx.setVisibility(android.view.View.GONE);
+        } else {
+            int more = app.weather.hereCount() - 1;
+            String until = a.expires == 0 ? "" : " · UNTIL "
+                    + new java.text.SimpleDateFormat("h:mm a", Locale.US).format(new java.util.Date(a.expires));
+            tvWx.setText("⚠ " + a.event.toUpperCase(Locale.US) + until + (more > 0 ? "  (+" + more + ")" : "") + "\nTAP FOR DETAILS");
+            tvWx.setTextColor(a.color());
+            tvWx.setBackground(frame(a.color(), black, dd));
+            tvWx.setVisibility(android.view.View.VISIBLE);
+        }
+    }
+
+    // ---------- weather ----------
+
+    private void drawWeather() {
+        boolean on = app.prefs.getBoolean("weather", true);
+        String sig = on + "|" + app.weather.lastOk;
+        if (sig.equals(wxDrawn)) return;
+        wxDrawn = sig;
+        map.getOverlays().removeAll(wxOverlays);
+        wxOverlays.clear();
+        if (on) {
+            float dd = getResources().getDisplayMetrics().density;
+            for (final Weather.Alert a : app.weather.alerts) {
+                if (!a.active()) continue;
+                for (List<double[]> ring : a.polygons) {
+                    org.osmdroid.views.overlay.Polygon pg = new org.osmdroid.views.overlay.Polygon(map);
+                    List<GeoPoint> pts = new ArrayList<>();
+                    for (double[] p : ring) pts.add(new GeoPoint(p[0], p[1]));
+                    pg.setPoints(pts);
+                    pg.getFillPaint().setColor((a.color() & 0x00FFFFFF) | 0x2E000000);
+                    pg.getOutlinePaint().setColor(a.color());
+                    pg.getOutlinePaint().setStrokeWidth(2.5f * dd);
+                    pg.setInfoWindow(null);
+                    pg.setOnClickListener((polygon, mapView, pos) -> { showWeather(a); return true; });
+                    wxOverlays.add(pg);
+                }
+            }
+            // index 0 is the long-press catcher; warnings sit just above it, under every marker
+            map.getOverlays().addAll(Math.min(1, map.getOverlays().size()), wxOverlays);
+        }
+        map.invalidate();
+    }
+
+    private void showWeather(Weather.Alert a) {
+        if (a == null) return;
+        String body = (a.headline.isEmpty() ? "" : a.headline + "\n\n")
+                + (a.area.isEmpty() ? "" : "AREA: " + a.area + "\n\n")
+                + (a.instruction.isEmpty() ? "" : "WHAT TO DO: " + a.instruction + "\n\n")
+                + a.description;
+        if (body.length() > 4000) body = body.substring(0, 4000) + "…";
+        new AlertDialog.Builder(this)
+                .setTitle("⚠ " + a.event.toUpperCase(Locale.US))
+                .setMessage(body + "\n\nSource: National Weather Service")
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private void weatherMenu() {
+        if (!app.prefs.getBoolean("weather", true)) { toast("Weather warnings are turned off in Settings"); return; }
+        Weather w = app.weather;
+        final List<Weather.Alert> here = new ArrayList<>();
+        for (Weather.Alert a : w.alerts) if (a.here && a.active()) here.add(a);
+        String status = w.lastOk == 0
+                ? (w.lastError != null ? "Couldn't reach the weather service (" + w.lastError + ")"
+                : app.lastLoc == null ? "Waiting for a GPS fix" : "Not checked yet")
+                : "Checked " + Geo.ago(w.lastOk, System.currentTimeMillis())
+                + (w.lastError != null ? " · latest try failed, showing the last good data" : "");
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("// WEATHER · NWS");
+        if (here.isEmpty()) {
+            b.setMessage("No active alerts for your location.\n" + status
+                    + "\n\nNeeds internet. Tornado, severe storm and flash flood warning areas within about 250 miles are drawn on the map.");
+        } else {
+            String[] items = new String[here.size()];
+            for (int i = 0; i < items.length; i++) items[i] = "⚠ " + here.get(i).event;
+            b.setItems(items, (d, which) -> showWeather(here.get(which)));
+        }
+        b.setPositiveButton("Check now", (d, x) -> { app.pollWeather(true); toast("Checking…"); })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
     // ---------- tactical HUD helpers ----------
 
     /** "RNG 1.24 MI · BRG 047° NE" */
@@ -359,6 +807,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
             tvClock.setText(f.format(new java.util.Date()).toUpperCase(Locale.US));
             updateTileStatus();
+            updateBanners();
             clockHandler.postDelayed(this, 1000);
         }
     };
@@ -439,13 +888,26 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             m.setOnMarkerClickListener((mk, mv) -> { pinTapped(p.id); return true; });
             itemOverlays.add(m);
         }
+        boolean trails = app.prefs.getBoolean("trails", true);
+        float dd = getResources().getDisplayMetrics().density;
         for (Store.Station s : app.store.stations.values()) {
             Marker m = new Marker(map);
             m.setPosition(new GeoPoint(s.lat, s.lon));
             boolean stale = now - s.time > 30 * 60 * 1000L;
-            int color = stale ? Color.GRAY
+            boolean sos = app.isSos(s.call);
+            int color = sos ? Color.parseColor("#FFFF3B30") : stale ? Color.GRAY
                     : "MESH".equals(s.via) ? Color.parseColor("#FF00E5FF") : Color.parseColor("#FF39FF14");
-            m.setIcon(labelIcon(s.label(), color, 0));
+            if (trails && s.trail.size() > 1) {
+                Polyline tl = new Polyline();
+                List<GeoPoint> tp = new ArrayList<>();
+                for (double[] q : s.trail) tp.add(new GeoPoint(q[0], q[1]));
+                tl.setPoints(tp);
+                tl.getOutlinePaint().setColor((color & 0x00FFFFFF) | 0x99000000);
+                tl.getOutlinePaint().setStrokeWidth(2f * dd);
+                tl.setInfoWindow(null);
+                itemOverlays.add(tl);
+            }
+            m.setIcon(labelIcon((sos ? "SOS " : "") + s.label(), color, 0));
             m.setAnchor(0.5f, iconAnchorY);
             m.setInfoWindow(null);
             m.setOnMarkerClickListener((mk, mv) -> { stationTapped(s.call); return true; });
@@ -680,6 +1142,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         if (s == null) return;
         String info = Mgrs.format(s.lat, s.lon) + "\n" + rangeFromMe(s.lat, s.lon)
                 + "\nHeard " + Geo.ago(s.time, System.currentTimeMillis())
+                + (s.checkTime > 0 ? "\nChecked in OK " + Geo.ago(s.checkTime, System.currentTimeMillis()) : "")
+                + (app.isSos(call) ? "\n▲ SOS ACTIVE" : "")
                 + (s.comment.isEmpty() ? "" : "\n" + s.comment);
         boolean tracking = ("sta:" + call).equals(target);
         new AlertDialog.Builder(this)
@@ -719,7 +1183,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             return s == null ? null : new double[]{s.lat, s.lon};
         }
         if (target.startsWith("pt:")) {
-            String[] parts = target.substring(3).split(",");
+            String[] parts = target.substring(3).split(",", 3);
             return new double[]{Double.parseDouble(parts[0]), Double.parseDouble(parts[1])};
         }
         return null;
@@ -732,7 +1196,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             return p == null ? "" : p.name;
         }
         if (target.startsWith("sta:")) return app.displayName(target.substring(4));
-        return "Grid point";
+        String[] parts = target.substring(3).split(",", 3);
+        return parts.length > 2 && !parts[2].trim().isEmpty() ? parts[2].trim() : "Grid point";
     }
 
     private void refreshTarget() {
@@ -744,10 +1209,19 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             map.invalidate();
             return;
         }
-        targetRow.setVisibility(android.view.View.VISIBLE);
+        if (targetRow.getVisibility() != android.view.View.VISIBLE) {
+            targetRow.setVisibility(android.view.View.VISIBLE);
+            toastOnce("steer", "The arrow shows which way to walk. Hold the phone flat, top pointing ahead.");
+        }
+        updateArrow();
         Location l = app.lastLoc;
         if (l != null) {
-            tvTarget.setText(targetName().toUpperCase(Locale.US) + "\n" + rngBrg(l.getLatitude(), l.getLongitude(), t[0], t[1]));
+            String nav = rngBrg(l.getLatitude(), l.getLongitude(), t[0], t[1]);
+            if (l.hasSpeed() && l.getSpeed() > 0.7f && System.currentTimeMillis() - l.getTime() < 30_000L) {
+                nav += "\nETA " + Geo.formatEta(Geo.distance(l.getLatitude(), l.getLongitude(), t[0], t[1]), l.getSpeed())
+                        + " @ " + Geo.formatSpeed(l.getSpeed(), app.imperial());
+            }
+            tvTarget.setText(targetName().toUpperCase(Locale.US) + "\n" + nav);
             rangeLine.setPoints(Arrays.asList(new GeoPoint(l.getLatitude(), l.getLongitude()), new GeoPoint(t[0], t[1])));
             rangeLine.setVisible(true);
         } else {
@@ -829,25 +1303,26 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     // ---------- menu ----------
 
     private void showMenu() {
-        List<String> items = new ArrayList<>();
-        items.add("Radios (UV-PRO / Meshtastic)");
-        items.add("Send my position now");
-        items.add("Download this area for offline");
-        items.add("Clear heard stations");
-        items.add("Packet log");
-        items.add("Settings");
-        items.add("Map diagnostics");
+        final String RADIOS = "Radios (UV-PRO / Meshtastic)", CHK = "Check in: send OK + my grid",
+                POS = "Send my position now", DL = "Download this area for offline",
+                TRK = "My trail (export GPX / clear)", BAK = "Backup / restore places",
+                WX = "Weather alerts", CLR = "Clear heard stations", LOG = "Packet log",
+                DIAG = "Map diagnostics", SET = "Settings";
+        final String[] items = {RADIOS, CHK, POS, DL, TRK, BAK, WX, CLR, LOG, DIAG, SET};
         new AlertDialog.Builder(this)
-                .setItems(items.toArray(new String[0]), (d, which) -> {
-                    switch (which) {
-                        case 0: radioTapped(); break;
-                        case 1: if (requireShare()) { if (app.beaconNow()) toast("Position sent"); else toast("No GPS fix yet"); } break;
-                        case 2: downloadArea(); break;
-                        case 3: app.store.clearStations(); refreshMarkers(); break;
-                        case 4: startActivity(new Intent(this, LogActivity.class)); break;
-                        case 5: startActivity(new Intent(this, SettingsActivity.class)); break;
-                        case 6: runMapDiagnostics(); break;
-                    }
+                .setItems(items, (d, which) -> {
+                    String a = items[which];
+                    if (a.equals(RADIOS)) radioTapped();
+                    else if (a.equals(CHK)) { if (requireShare()) toast(app.checkIn() ? "Check-in sent" : "Send failed. See the packet log"); }
+                    else if (a.equals(POS)) { if (requireShare()) toast(app.beaconNow() ? "Position sent" : "No GPS fix yet"); }
+                    else if (a.equals(DL)) downloadArea();
+                    else if (a.equals(TRK)) trailMenu();
+                    else if (a.equals(BAK)) backupMenu();
+                    else if (a.equals(WX)) weatherMenu();
+                    else if (a.equals(CLR)) { app.store.clearStations(); app.sosFrom.clear(); refreshMarkers(); }
+                    else if (a.equals(LOG)) startActivity(new Intent(this, LogActivity.class));
+                    else if (a.equals(DIAG)) runMapDiagnostics();
+                    else if (a.equals(SET)) startActivity(new Intent(this, SettingsActivity.class));
                 })
                 .show();
     }
@@ -921,7 +1396,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             new AlertDialog.Builder(this)
                     .setTitle("// UV-PRO · APRS")
                     .setMessage(radioSummary())
-                    .setPositiveButton("Disconnect", (d, w) -> app.radio.disconnect())
+                    .setPositiveButton("Disconnect", (d, w) -> {
+                        app.prefs.edit().putBoolean("wantAprs", false).apply();
+                        app.radio.disconnect();
+                    })
                     .setNegativeButton("Close", null).show();
             return;
         }
@@ -955,7 +1433,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .setTitle("// LINK UV-PRO")
                 .setItems(names, (d, which) -> {
                     BluetoothDevice dev = devices.get(which);
-                    app.prefs.edit().putString("lastRadio", dev.getAddress()).apply();
+                    app.prefs.edit().putString("lastRadio", dev.getAddress()).putBoolean("wantAprs", true).apply();
                     app.radio.connect(dev);
                 })
                 .setNegativeButton("Cancel", null)
@@ -972,7 +1450,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     .setMessage("State: " + app.mesh.getState() + "\nDevice: " + app.mesh.deviceName()
                             + "\nMy node: " + (app.myNodeNum == 0 ? "?" : Mesh.nodeId(app.myNodeNum))
                             + "\nPackets received: " + app.mesh.rxCount + "\nPackets sent: " + app.mesh.txCount)
-                    .setPositiveButton("Disconnect", (d, w) -> app.mesh.disconnect())
+                    .setPositiveButton("Disconnect", (d, w) -> {
+                        app.prefs.edit().putBoolean("wantMesh", false).apply();
+                        app.mesh.disconnect();
+                    })
                     .setNegativeButton("Close", null).show();
             return;
         }
@@ -1042,6 +1523,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             new AlertDialog.Builder(this)
                     .setTitle("// LINK MESH NODE")
                     .setItems(names, (d, which) -> {
+                        app.prefs.edit().putString("lastMesh", found.get(which).getAddress()).putBoolean("wantMesh", true).apply();
                         app.mesh.connect(found.get(which));
                         toastOnce("meshPin", "If Android asks for a PIN, use the one shown on the Heltec's screen (default 123456)");
                     })
@@ -1119,7 +1601,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     }
 
     private final LocationListener locListener = new LocationListener() {
-        @Override public void onLocationChanged(@NonNull Location loc) { onNewLocation(loc); }
+        @Override public void onLocationChanged(@NonNull Location loc) { app.onLocation(loc); }
         @Override public void onStatusChanged(String provider, int status, Bundle extras) { }
         @Override public void onProviderEnabled(@NonNull String provider) { }
         @Override public void onProviderDisabled(@NonNull String provider) { }
@@ -1137,20 +1619,15 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000, 0, locListener);
             Location last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
             if (last == null) last = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-            if (last != null) onNewLocation(last);
+            if (last != null) app.onLocation(last);
         } catch (Exception e) {
             toast("Location error: " + e.getMessage());
         }
     }
 
-    private void onNewLocation(Location loc) {
-        Location prev = app.lastLoc;
-        boolean better = prev == null
-                || loc.getTime() - prev.getTime() > 10000
-                || loc.getAccuracy() <= prev.getAccuracy()
-                || LocationManager.GPS_PROVIDER.equals(loc.getProvider());
-        if (!better) return;
-        app.lastLoc = loc;
+    /** A new fix accepted by the app (from this screen or the background service). */
+    @Override
+    public void onLocation(Location loc) {
         tvMe.setText(Mgrs.format(loc.getLatitude(), loc.getLongitude())
                 + (loc.hasAccuracy() ? String.format(Locale.US, "  ±%.0f%s",
                 app.imperial() ? loc.getAccuracy() * 3.28084 : loc.getAccuracy(), app.imperial() ? "FT" : "M") : ""));
@@ -1160,6 +1637,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             map.getController().setCenter(new GeoPoint(loc.getLatitude(), loc.getLongitude()));
         }
         firstFix = false;
+        syncTrail();
         updateCenterText();
         refreshTarget();
     }
@@ -1204,10 +1682,19 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         app.addListener(this);
         if (app.prefs.getBoolean("keepOn", false)) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        app.mapVisible = true;
+        compass.start();
+        androidx.core.app.NotificationManagerCompat.from(this).cancel(Alerts.ID_SOS);
+        trailDrawn = 0;
+        if (app.lastLoc != null) onLocation(app.lastLoc);
+        syncTrail();
         refreshMarkers();
         updateRadioStatus();
         updateCenterText();
+        drawWeather();
+        updateBanners();
         app.updateService();
+        app.pollWeather(false);
     }
 
     @Override
@@ -1216,12 +1703,17 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         map.onPause();
         clockHandler.removeCallbacks(clockTick);
         app.removeListener(this);
+        app.mapVisible = false;
+        compass.stop();
+        heading = Float.NaN;
+        tvHdg.setText("");
         IGeoPoint c = map.getMapCenter();
         app.prefs.edit()
                 .putLong("mapLat", Double.doubleToLongBits(c.getLatitude()))
                 .putLong("mapLon", Double.doubleToLongBits(c.getLongitude()))
                 .putLong("mapZoom", Double.doubleToLongBits(map.getZoomLevelDouble()))
                 .apply();
+        app.store.flush();
     }
 
     @Override
@@ -1230,7 +1722,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         if (lm != null) lm.removeUpdates(locListener);
     }
 
-    @Override public void onDataChanged() { refreshMarkers(); updateRadioStatus(); }
+    @Override public void onDataChanged() { refreshMarkers(); updateRadioStatus(); drawWeather(); updateBanners(); }
     @Override public void onRadioChanged() { updateRadioStatus(); }
 
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }

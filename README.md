@@ -9,6 +9,14 @@ A simple, free, ATAK-style map for Android that talks to your **BTECH UV-PRO** (
 - **Range & bearing** to any pin, station or typed-in MGRS grid
 - **Team positions**: everyone's radio beacons show up on the map
 - **Team chat**: APRS messages to your team name, or direct to a callsign (with delivery ✓)
+- **SOS**: one button sends your name and grid to the team every 2 minutes; their phones sound an alarm and show you in red
+- **Check-in and quick messages**: "OK + my grid" in one tap; tap any grid in chat to see it on the map
+- **Steering arrow, ETA and compass**: track a waypoint or teammate and follow the arrow; hold N↑ for a heading-up map
+- **Trails**: your own breadcrumb track (export as GPX) and teammates' recent paths
+- **Saved places**: private home/family markers that are never transmitted
+- **Backup / restore** of places, waypoints and settings to a file
+- **Severe weather**: National Weather Service warnings for your location, with warning areas drawn on the map (needs internet)
+- **Background mode and alerts**: radios stay linked with the screen off; auto-reconnect when the app opens
 - Raw packet log for troubleshooting
 
 ## Install

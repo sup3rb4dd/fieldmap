@@ -41,6 +41,9 @@ public class RadioLink {
     private BluetoothDevice device;
     private Thread worker;
     public volatile int rxCount = 0, txCount = 0;
+    /** Stop retrying after this time; pushed out to "forever" while connected. */
+    private volatile long deadline = Long.MAX_VALUE;
+    private static final long AFTER_DROP_MS = 15 * 60_000L;
 
     public RadioLink(Callback cb) {
         this.cb = cb;
@@ -56,8 +59,12 @@ public class RadioLink {
         }
     }
 
-    public synchronized void connect(BluetoothDevice d) {
+    public void connect(BluetoothDevice d) { connect(d, 2 * 60_000L); }
+
+    /** giveUpMs: how long to keep trying before the first successful connection. */
+    public synchronized void connect(BluetoothDevice d, long giveUpMs) {
         disconnect();
+        deadline = System.currentTimeMillis() + giveUpMs;
         device = d;
         wanted = true;
         worker = new Thread(this::run, "radio-link");
@@ -97,6 +104,12 @@ public class RadioLink {
             setState(attempt == 0 ? State.CONNECTING : State.RETRYING, deviceName());
             BluetoothSocket s = open();
             if (s == null) {
+                if (System.currentTimeMillis() > deadline) {
+                    // radio is off or out of range: stop draining the battery
+                    wanted = false;
+                    setState(State.OFF, "LOST");
+                    return;
+                }
                 attempt++;
                 if (!sleep(Math.min(30000, 3000L * attempt))) return;
                 continue;
@@ -106,6 +119,7 @@ public class RadioLink {
             try {
                 InputStream in = s.getInputStream();
                 out = s.getOutputStream();
+                deadline = Long.MAX_VALUE;
                 setState(State.CONNECTED, deviceName());
                 Kiss.Decoder dec = new Kiss.Decoder();
                 byte[] buf = new byte[1024];
@@ -122,6 +136,7 @@ public class RadioLink {
             }
             closeSocket();
             if (wanted) {
+                deadline = System.currentTimeMillis() + AFTER_DROP_MS;
                 attempt = 1;
                 if (!sleep(3000)) return;
             }

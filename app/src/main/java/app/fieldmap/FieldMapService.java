@@ -33,14 +33,7 @@ public class FieldMapService extends Service {
     private LocationManager lm;
 
     private final LocationListener loc = new LocationListener() {
-        @Override public void onLocationChanged(@NonNull Location l) {
-            FieldMapApp app = FieldMapApp.get();
-            Location prev = app.lastLoc;
-            if (prev == null || l.getTime() - prev.getTime() > 10000 || l.getAccuracy() <= prev.getAccuracy()
-                    || LocationManager.GPS_PROVIDER.equals(l.getProvider())) {
-                app.lastLoc = l;
-            }
-        }
+        @Override public void onLocationChanged(@NonNull Location l) { FieldMapApp.get().onLocation(l); }
         @Override public void onStatusChanged(String provider, int status, Bundle extras) { }
         @Override public void onProviderEnabled(@NonNull String provider) { }
         @Override public void onProviderDisabled(@NonNull String provider) { }
@@ -93,6 +86,8 @@ public class FieldMapService extends Service {
             }
         }
         FieldMapApp.get().serviceRunning = true;
+        // Android restarted us after closing the app to free memory: bring the radios back
+        if (intent == null) FieldMapApp.get().autoConnect();
         FieldMapApp.get().log("Background mode ON");
         return START_STICKY;
     }
@@ -119,6 +114,7 @@ public class FieldMapService extends Service {
     public void onDestroy() {
         super.onDestroy();
         FieldMapApp.get().serviceRunning = false;
+        FieldMapApp.get().store.flush();
         if (lm != null) lm.removeUpdates(loc);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         FieldMapApp.get().log("Background mode OFF");

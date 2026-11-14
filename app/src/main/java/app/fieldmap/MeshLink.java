@@ -50,6 +50,10 @@ public class MeshLink {
     private int emptyReads, attempt;
     private volatile RadioLink.State state = RadioLink.State.OFF;
     public volatile int rxCount = 0, txCount = 0;
+    private long deadline = Long.MAX_VALUE;
+    private static final long AFTER_DROP_MS = 15 * 60_000L;
+    private byte[] inFlight;       // the write waiting for its callback
+    private int authRetries;
 
     public MeshLink(Context ctx, Callback cb) {
         this.ctx = ctx.getApplicationContext();
@@ -67,9 +71,14 @@ public class MeshLink {
         }
     }
 
-    public void connect(BluetoothDevice d) {
+    public void connect(BluetoothDevice d) { connect(d, 2 * 60_000L); }
+
+    /** giveUpMs: how long to keep trying before the first successful connection. */
+    public void connect(BluetoothDevice d, long giveUpMs) {
         main.post(() -> {
+            main.removeCallbacksAndMessages(null);
             closeGatt();
+            deadline = System.currentTimeMillis() + giveUpMs;
             device = d;
             wanted = true;
             attempt = 0;
@@ -123,8 +132,18 @@ public class MeshLink {
     }
 
     private void scheduleRetry() {
+        boolean wasReady = ready;
         closeGatt();
         if (!wanted) return;
+        if (wasReady) deadline = System.currentTimeMillis() + AFTER_DROP_MS;
+        if (System.currentTimeMillis() > deadline) {
+            // node is off or out of range: stop draining the battery
+            wanted = false;
+            main.removeCallbacksAndMessages(null);
+            state = RadioLink.State.OFF;
+            main.post(() -> cb.onMeshState(RadioLink.State.OFF, "LOST"));
+            return;
+        }
         attempt++;
         setState(RadioLink.State.RETRYING);
         main.postDelayed(this::openGatt, Math.min(30000, 3000L * attempt));
@@ -153,6 +172,7 @@ public class MeshLink {
         if (!writeQueue.isEmpty()) {
             byte[] b = writeQueue.poll();
             busy = true;
+            inFlight = b;
             if (!write(toRadio, b)) { busy = false; scheduleRetry(); return; }
             txCount++;
             return;
@@ -197,6 +217,10 @@ public class MeshLink {
             main.post(() -> {
                 if (g != gatt) return;
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    // Meshtastic needs a paired link; start pairing now instead of failing the first read
+                    try {
+                        if (device != null && device.getBondState() == BluetoothDevice.BOND_NONE) device.createBond();
+                    } catch (SecurityException ignored) { }
                     if (!g.requestMtu(512)) g.discoverServices();
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     scheduleRetry();
@@ -229,6 +253,8 @@ public class MeshLink {
                 }
                 ready = true;
                 attempt = 0;
+                authRetries = 0;
+                deadline = Long.MAX_VALUE;
                 setState(RadioLink.State.CONNECTED);
                 // ask the node to send its whole node database, then drain it
                 writeQueue.add(Mesh.wantConfig(new Random().nextInt(Integer.MAX_VALUE - 1) + 1));
@@ -246,7 +272,24 @@ public class MeshLink {
             main.post(() -> {
                 if (g != gatt) return;
                 busy = false;
-                if (status != BluetoothGatt.GATT_SUCCESS) { scheduleRetry(); return; }
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    // While Android shows the pairing PIN prompt, writes fail with an
+                    // authentication error. Tearing the link down would cancel pairing: wait and resend.
+                    boolean auth = status == 5 || status == 8 || status == 15 || status == 137;
+                    if (auth && inFlight != null && authRetries++ < 20) {
+                        final byte[] again = inFlight;
+                        main.postDelayed(() -> {
+                            if (g != gatt || !ready) return;
+                            writeQueue.addFirst(again);
+                            pump();
+                        }, 3000);
+                        return;
+                    }
+                    scheduleRetry();
+                    return;
+                }
+                authRetries = 0;
+                inFlight = null;
                 startDrain(); // a reply may be waiting
             });
         }

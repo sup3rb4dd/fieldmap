@@ -22,7 +22,8 @@ import java.util.Set;
 public final class Alerts {
     private Alerts() {}
 
-    public static final String CH_STATUS = "status", CH_ALERTS = "alerts";
+    public static final String CH_STATUS = "status", CH_ALERTS = "alerts", CH_SOS = "sos";
+    public static final int ID_SOS = 12, ID_WX = 13, ID_COMMS = 14;
     private static int nextId = 100;
     /** True while the chat screen is open (no message popups then). */
     public static boolean chatVisible = false;
@@ -37,6 +38,16 @@ public final class Alerts {
         alerts.setDescription("Messages, shared waypoints and overdue teammates");
         alerts.enableVibration(true);
         alerts.setVibrationPattern(new long[]{0, 250, 150, 250});
+        // SOS: plays the alarm sound on the alarm volume, so it is heard with the ringer silenced
+        NotificationChannel sos = new NotificationChannel(CH_SOS, "SOS alarm", NotificationManager.IMPORTANCE_HIGH);
+        sos.setDescription("A teammate sent an SOS");
+        sos.setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM),
+                new android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+        sos.enableVibration(true);
+        sos.setVibrationPattern(new long[]{0, 700, 250, 700, 250, 700});
+        nm.createNotificationChannel(sos);
         nm.createNotificationChannel(status);
         nm.createNotificationChannel(alerts);
     }
@@ -61,6 +72,47 @@ public final class Alerts {
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setContentIntent(pi)
                 .build());
+    }
+
+    /** Loud, repeating alarm until the notification is opened or swiped away. */
+    @SuppressLint("MissingPermission")
+    public static void sos(Context ctx, String from, String text) {
+        FieldMapApp app = FieldMapApp.get();
+        if (!allowed(ctx)) return;
+        boolean loud = app.prefs.getBoolean("alertSos", true);
+        PendingIntent pi = PendingIntent.getActivity(ctx, ID_SOS,
+                new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        android.app.Notification n = new NotificationCompat.Builder(ctx, loud ? CH_SOS : CH_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat)
+                .setContentTitle("SOS · " + from.toUpperCase(Locale.US))
+                .setContentText(text)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                .setColor(0xFFFF3B30)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setContentIntent(pi)
+                .build();
+        // keep sounding until someone looks, unless the map (with its flashing banner) is already open
+        if (loud && !app.mapVisible) n.flags |= android.app.Notification.FLAG_INSISTENT;
+        NotificationManagerCompat.from(ctx).notify(ID_SOS, n);
+    }
+
+    public static void sosCleared(Context ctx, String from) {
+        NotificationManagerCompat.from(ctx).cancel(ID_SOS);
+        post(ctx, "SOS CANCELLED · " + from.toUpperCase(Locale.US), from + " reports OK", MainActivity.class, ID_SOS);
+    }
+
+    public static void weather(Context ctx, Weather.Alert a) {
+        if (!FieldMapApp.get().prefs.getBoolean("weather", true)) return;
+        String until = a.expires == 0 ? "" : " until "
+                + new java.text.SimpleDateFormat("h:mm a", Locale.US).format(new java.util.Date(a.expires));
+        post(ctx, a.event.toUpperCase(Locale.US) + until, a.headline.isEmpty() ? a.area : a.headline, MainActivity.class, ID_WX);
+    }
+
+    public static void commsLost(Context ctx, String which) {
+        post(ctx, "COMMS LOST · " + which, "Could not reach the radio. Open FieldMap to reconnect.", MainActivity.class, ID_COMMS);
     }
 
     public static void message(Context ctx, String from, String text, boolean direct) {

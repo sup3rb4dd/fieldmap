@@ -29,6 +29,24 @@
         android:stackFromBottom="true"
         android:transcriptMode="alwaysScroll" />
 
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="6dp"
+        android:scrollbars="none">
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <Button android:id="@+id/q1" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="0dp" android:text="OK" />
+            <Button android:id="@+id/q2" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ON MY WAY" />
+            <Button android:id="@+id/q3" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ARRIVED" />
+            <Button android:id="@+id/q4" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="NEED PICKUP" />
+            <Button android:id="@+id/q5" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="WHERE ARE YOU?" />
+            <Button android:id="@+id/qGrid" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="+ MY GRID" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

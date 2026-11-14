@@ -38,6 +38,9 @@ public class Store {
         public long time;
         public char table = '/', code = '[';
         public String comment = "";
+        public long checkTime;     // last "CHK" check-in heard from this station
+        /** Recent positions {lat, lon}, oldest first. In memory only. */
+        public final List<double[]> trail = new ArrayList<>();
 
         public String label() { return name == null || name.isEmpty() ? call : name; }
     }
@@ -112,6 +115,11 @@ public class Store {
         }
         s.via = via;
         if (name != null && !name.isEmpty()) s.name = name;
+        if (s.trail.isEmpty()
+                || app.fieldmap.core.Geo.distance(s.trail.get(s.trail.size() - 1)[0], s.trail.get(s.trail.size() - 1)[1], lat, lon) > 20) {
+            s.trail.add(new double[]{lat, lon});
+            if (s.trail.size() > 200) s.trail.remove(0);
+        }
         s.lat = lat;
         s.lon = lon;
         s.table = table;
@@ -181,21 +189,73 @@ public class Store {
 
     // ---------- persistence ----------
 
+    private final android.os.Handler saver = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean savePending = false;
+
+    /** Schedules a write. Bursts (like a 200-node mesh database arriving) become one write. */
     public void save() {
+        if (savePending) return;
+        savePending = true;
+        saver.postDelayed(this::flush, 400);
+    }
+
+    private static JSONObject pinJson(Pin p) throws org.json.JSONException {
+        JSONObject o = new JSONObject();
+        o.put("id", p.id); o.put("name", p.name); o.put("lat", p.lat); o.put("lon", p.lon);
+        o.put("owner", p.owner); o.put("comment", p.comment); o.put("time", p.time); o.put("shared", p.shared);
+        o.put("meshId", p.meshId); o.put("place", p.place);
+        return o;
+    }
+
+    private static Pin pinFrom(JSONObject o) throws org.json.JSONException {
+        Pin p = new Pin();
+        p.id = o.getString("id"); p.name = o.optString("name"); p.lat = o.getDouble("lat"); p.lon = o.getDouble("lon");
+        p.owner = o.optString("owner"); p.comment = o.optString("comment"); p.time = o.optLong("time");
+        p.shared = o.optBoolean("shared");
+        p.meshId = o.optInt("meshId");
+        p.place = o.optBoolean("place");
+        return p;
+    }
+
+    /** My own waypoints and saved places, for a backup file. */
+    public JSONArray exportMyPins() throws org.json.JSONException {
+        JSONArray out = new JSONArray();
+        for (Pin p : pins.values()) if (p.isMine()) out.put(pinJson(p));
+        return out;
+    }
+
+    /** Merges pins from a backup file (same id = replaced). Returns how many were read. */
+    public int importPins(JSONArray arr) {
+        int n = 0;
+        for (int i = 0; arr != null && i < arr.length(); i++) {
+            try {
+                Pin p = pinFrom(arr.getJSONObject(i));
+                if (Double.isNaN(p.lat) || Double.isNaN(p.lon) || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) continue;
+                p.owner = "";
+                p.shared = false;   // not shared from this phone yet
+                p.meshId = 0;
+                pins.put(p.id, p);
+                n++;
+            } catch (Exception ignored) {
+            }
+        }
+        if (n > 0) save();
+        return n;
+    }
+
+    /** Writes to storage right now. */
+    public void flush() {
+        saver.removeCallbacksAndMessages(null);
+        savePending = false;
         try {
             JSONArray jp = new JSONArray();
-            for (Pin p : pins.values()) {
-                JSONObject o = new JSONObject();
-                o.put("id", p.id); o.put("name", p.name); o.put("lat", p.lat); o.put("lon", p.lon);
-                o.put("owner", p.owner); o.put("comment", p.comment); o.put("time", p.time); o.put("shared", p.shared); o.put("meshId", p.meshId); o.put("place", p.place);
-                jp.put(o);
-            }
+            for (Pin p : pins.values()) jp.put(pinJson(p));
             JSONArray js = new JSONArray();
             for (Station s : stations.values()) {
                 JSONObject o = new JSONObject();
                 o.put("call", s.call); o.put("lat", s.lat); o.put("lon", s.lon); o.put("time", s.time);
                 o.put("table", String.valueOf(s.table)); o.put("code", String.valueOf(s.code)); o.put("comment", s.comment);
-                o.put("name", s.name); o.put("via", s.via);
+                o.put("name", s.name); o.put("via", s.via); o.put("checkTime", s.checkTime);
                 js.put(o);
             }
             JSONArray jm = new JSONArray();
@@ -215,13 +275,7 @@ public class Store {
         try {
             JSONArray jp = new JSONArray(sp.getString("pins", "[]"));
             for (int i = 0; i < jp.length(); i++) {
-                JSONObject o = jp.getJSONObject(i);
-                Pin p = new Pin();
-                p.id = o.getString("id"); p.name = o.optString("name"); p.lat = o.getDouble("lat"); p.lon = o.getDouble("lon");
-                p.owner = o.optString("owner"); p.comment = o.optString("comment"); p.time = o.optLong("time");
-                p.shared = o.optBoolean("shared");
-                p.meshId = o.optInt("meshId");
-                p.place = o.optBoolean("place");
+                Pin p = pinFrom(jp.getJSONObject(i));
                 pins.put(p.id, p);
             }
             JSONArray js = new JSONArray(sp.getString("stations", "[]"));
@@ -235,6 +289,7 @@ public class Store {
                 s.comment = o.optString("comment");
                 s.name = o.optString("name");
                 s.via = o.optString("via", "APRS");
+                s.checkTime = o.optLong("checkTime");
                 stations.put(s.call, s);
             }
             JSONArray jm = new JSONArray(sp.getString("messages", "[]"));

@@ -49,6 +49,14 @@ public class SettingsActivity extends AppCompatActivity {
         CheckBox alertWpt = findViewById(R.id.setAlertWpt);
         CheckBox alertOverdue = findViewById(R.id.setAlertOverdue);
         Spinner overdueMin = findViewById(R.id.setOverdueMin);
+        CheckBox autoConnect = findViewById(R.id.setAutoConnect);
+        CheckBox alertSos = findViewById(R.id.setAlertSos);
+        CheckBox weather = findViewById(R.id.setWeather);
+        CheckBox trails = findViewById(R.id.setTrails);
+        autoConnect.setChecked(app.prefs.getBoolean("autoConnect", true));
+        alertSos.setChecked(app.prefs.getBoolean("alertSos", true));
+        weather.setChecked(app.prefs.getBoolean("weather", true));
+        trails.setChecked(app.prefs.getBoolean("trails", true));
 
         meshCh.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, CH_NAMES));
         meshCh.setSelection(Math.max(0, Math.min(7, app.meshChannel())));
@@ -117,6 +125,10 @@ public class SettingsActivity extends AppCompatActivity {
                     .putBoolean("alertMsg", alertMsg.isChecked())
                     .putBoolean("alertWpt", alertWpt.isChecked())
                     .putBoolean("alertOverdue", alertOverdue.isChecked())
+                    .putBoolean("autoConnect", autoConnect.isChecked())
+                    .putBoolean("alertSos", alertSos.isChecked())
+                    .putBoolean("weather", weather.isChecked())
+                    .putBoolean("trails", trails.isChecked())
                     .putInt("overdueMin", OVERDUE_MIN[Math.max(0, overdueMin.getSelectedItemPosition())])
                     .apply();
             app.updateService();
