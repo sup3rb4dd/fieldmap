@@ -36,7 +36,7 @@ jobs:
           aar=$(find ~/.gradle -name "osmdroid-android-6.1.20.aar" | head -1)
           if [ -n "$aar" ]; then
             mkdir -p /tmp/osm && cd /tmp/osm && unzip -o -q "$aar" classes.jar && unzip -o -q classes.jar
-            api=$( (javap -cp classes.jar org.osmdroid.views.overlay.TilesOverlay | grep -i "state"; find . -name "TileStates*.class") | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+            api=$( (javap -cp classes.jar org.osmdroid.tileprovider.TileStates) | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
             echo "::error title=osmdroid API::$api"
           fi
 
