@@ -241,7 +241,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private void updateTileStatus() {
         TextView tv = findViewById(R.id.tvTiles);
         try {
-            org.osmdroid.util.TileStates ts = map.getOverlayManager().getTilesOverlay().getTileStates();
+            org.osmdroid.views.overlay.TileStates ts = map.getOverlayManager().getTilesOverlay().getTileStates();
             int total = ts.getTotal();
             int good = ts.getUpToDate() + ts.getExpired();
             int missing = ts.getNotFound();
