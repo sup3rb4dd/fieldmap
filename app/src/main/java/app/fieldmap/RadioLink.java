@@ -131,9 +131,17 @@ public class RadioLink {
                 setState(State.CONNECTED, deviceName());
                 Kiss.Decoder dec = new Kiss.Decoder();
                 byte[] buf = new byte[1024];
+                rawBytes = 0;
                 while (wanted) {
                     int n = in.read(buf);
                     if (n < 0) break;
+                    if (rawBytes == 0) {
+                        // the first bytes show what kind of port this is: a packet modem starts frames with C0
+                        StringBuilder hx = new StringBuilder();
+                        for (int i = 0; i < Math.min(n, 16); i++) hx.append(String.format("%02X ", buf[i] & 0xFF));
+                        FieldMapApp.get().log("Radio first bytes: " + hx.toString().trim());
+                    }
+                    rawBytes += n;
                     List<byte[]> frames = dec.feed(buf, n);
                     for (byte[] f : frames) {
                         rxCount++;
@@ -159,6 +167,13 @@ public class RadioLink {
             if (a != null) a.cancelDiscovery();
         } catch (SecurityException ignored) {
         }
+        // what the radio says it offers, for the log (helps when a connection opens but nothing works)
+        try {
+            android.os.ParcelUuid[] us = d.getUuids();
+            StringBuilder sb = new StringBuilder();
+            if (us != null) for (android.os.ParcelUuid u : us) sb.append(u.toString(), 0, 8).append(' ');
+            FieldMapApp.get().log("Radio offers: " + (sb.length() == 0 ? "(nothing listed)" : sb.toString().trim()));
+        } catch (Exception ignored) { }
         // The UV-PRO offers more than one serial port over Bluetooth, and only one of them is the
         // KISS modem (port 1 on the radios people have written up). The standard lookup can land on
         // the other one, which accepts the connection and then ignores every packet. So port 1 is
@@ -188,6 +203,8 @@ public class RadioLink {
 
     /** How the current connection was opened, for the UV-PRO screen and the log. */
     public volatile String how = "";
+    /** Bytes of any kind received on this connection. */
+    public volatile long rawBytes = 0;
 
     private BluetoothSocket channel(BluetoothDevice d, int ch) {
         try {
@@ -299,6 +316,7 @@ public class RadioLink {
         if (v == null) return;
         final byte[] copy = v.clone();
         main.post(() -> {
+            rawBytes += copy.length;
             for (byte[] f : bleDecoder.feed(copy, copy.length)) {
                 rxCount++;
                 cb.onFrame(f);

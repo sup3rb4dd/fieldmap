@@ -100,5 +100,9 @@ public final class Gmrs {
         public synchronized long waitMs(long now) { return Math.max(0, GAP_MS - (now - lastTx)); }
         public synchronized int size() { return q.size(); }
         public synchronized void clear() { q.clear(); }
+        /** The last burst never went on the air (link test): the next one need not wait. */
+        public synchronized void forgetLast() { lastTx = -GAP_MS; }
+        /** A burst was sent outside the queue (link test): it counts toward the thirty seconds. */
+        public synchronized void markSent(long now) { lastTx = now; }
     }
 }

@@ -1660,7 +1660,12 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         app.prefs.edit().putBoolean("wantAprs", false).apply();
                         app.radio.disconnect();
                     })
-                    .setNeutralButton("Change port", (d, w) -> choosePort())
+                    .setNeutralButton("Connection test", (d, w) -> new AlertDialog.Builder(this)
+                            .setTitle("// UV-PRO CONNECTION")
+                            .setItems(new String[]{"Find the working connection (guided test)", "Choose the connection by hand"}, (d2, w2) -> {
+                                if (w2 == 0) startWizard(); else choosePort();
+                            })
+                            .setNegativeButton("Cancel", null).show())
                     .setNegativeButton("Close", null).show();
             return;
         }
@@ -1833,9 +1838,99 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 .show();
     }
 
+    // ---------- guided connection test ----------
+
+    private static final int[] WIZ_VALS = {100, 1, 2, 3, RadioLink.PORT_BLE};
+    private static final String[] WIZ_NAMES = {"Classic Bluetooth, standard lookup", "Classic Bluetooth, port 1", "Classic Bluetooth, port 2",
+            "Classic Bluetooth, port 3", "Bluetooth Low Energy"};
+    private int wizStep = -1;
+    private long wizSince;
+
+    private void startWizard() {
+        if (!app.hasCallsign()) { toast(app.gmrs() ? "Finish GMRS setup in Settings first" : "Set your callsign in Settings first"); return; }
+        int wait = app.gmrs() ? app.gmrsWaitSeconds() : 0;
+        new AlertDialog.Builder(this)
+                .setTitle("// FIND THE WORKING CONNECTION")
+                .setMessage("The app will try each way of connecting to the UV-PRO in turn. For each one it sends a single short test packet, then asks whether the radio transmitted.\n\n"
+                        + "Watch the radio: when a packet goes out, its transmit light comes on for about a second (a second radio on the same channel hears a short buzz).\n\n"
+                        + "Before starting: KISS TNC ticked on the radio, radio on your test channel, BTECH app closed."
+                        + (wait > 0 ? "\n\nA packet went out " + (30 - wait) + " s ago: wait " + wait + " s before starting." : ""))
+                .setPositiveButton("Start", (d, w) -> {
+                    if (app.gmrs() && app.gmrsWaitSeconds() > 0) toast("Wait " + app.gmrsWaitSeconds() + " s, then start again");
+                    else wizardTry(0);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void wizardTry(int step) {
+        if (step >= WIZ_VALS.length) {
+            wizStep = -1;
+            app.prefs.edit().putInt("kissPort", 0).apply();
+            app.log("CONNECTION TEST: none of the " + WIZ_VALS.length + " methods made the radio transmit");
+            new AlertDialog.Builder(this)
+                    .setTitle("// NONE OF THEM TRANSMITTED")
+                    .setMessage("Every connection method was tried. The packet log now holds the full record of what was sent and what the radio answered: "
+                            + "open it and use SEND TO… to share it.\n\nOne more thing to try: in Android's Bluetooth settings, forget the UV-PRO, "
+                            + "pair it again while KISS TNC is ticked, then run this test once more.")
+                    .setPositiveButton("Open the log", (d, w) -> startActivity(new Intent(this, LogActivity.class)))
+                    .setNegativeButton("Close", null)
+                    .show();
+            return;
+        }
+        String addr = app.prefs.getString("lastRadio", "");
+        BluetoothAdapter ad = adapterOrToast();
+        if (ad == null || !BluetoothAdapter.checkBluetoothAddress(addr)) { toast("Connect the UV-PRO once first"); return; }
+        wizStep = step;
+        wizSince = System.currentTimeMillis();
+        app.log("CONNECTION TEST " + (step + 1) + "/" + WIZ_VALS.length + ": " + WIZ_NAMES[step]);
+        app.prefs.edit().putInt("kissPort", WIZ_VALS[step]).putBoolean("wantAprs", true).apply();
+        app.radio.disconnect();
+        final BluetoothDevice dev = ad.getRemoteDevice(addr);
+        toast("Trying " + (step + 1) + " of " + WIZ_VALS.length + ": " + WIZ_NAMES[step]);
+        clockHandler.postDelayed(() -> { app.radio.connect(dev, 15_000L); clockHandler.postDelayed(wizWatch, 1000); }, 2000);
+    }
+
+    private final Runnable wizWatch = new Runnable() {
+        @Override public void run() {
+            if (wizStep < 0 || isFinishing()) return;
+            final int step = wizStep;
+            if (app.radio.isConnected()) {
+                String err = app.linkTest();
+                if (err != null) { app.log("CONNECTION TEST: " + err); wizardTry(step + 1); return; }
+                // give the radio a few seconds to key up before asking
+                clockHandler.postDelayed(() -> { if (wizStep == step) wizAsk(step); }, 3500);
+            } else if (System.currentTimeMillis() - wizSince > 22_000L) {
+                app.log("CONNECTION TEST: could not connect with " + WIZ_NAMES[step]);
+                wizardTry(step + 1);
+            } else {
+                clockHandler.postDelayed(this, 1000);
+            }
+        }
+    };
+
+    private void wizAsk(final int step) {
+        if (isFinishing()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("// DID THE RADIO TRANSMIT?")
+                .setMessage("Tried: " + WIZ_NAMES[step] + "\nConnected as: " + app.radio.how + "\n\nA test packet was just handed to the radio. Did its transmit light come on?")
+                .setCancelable(false)
+                .setPositiveButton("Yes, it transmitted", (d, w) -> {
+                    wizStep = -1;
+                    app.log("CONNECTION TEST: WORKS with " + WIZ_NAMES[step] + " (" + app.radio.how + ")");
+                    toast("Saved. The app will use this connection from now on.");
+                })
+                .setNegativeButton("No", (d, w) -> {
+                    app.log("CONNECTION TEST: no transmit with " + WIZ_NAMES[step] + ", " + app.radio.rawBytes + " bytes heard from the radio");
+                    app.gmrsQueue.forgetLast();
+                    wizardTry(step + 1);
+                })
+                .show();
+    }
+
     private String radioSummary() {
         return "State: " + app.radio.getState() + "\nDevice: " + app.radio.deviceName()
-                + "\nBluetooth: " + app.radio.how
+                + "\nBluetooth: " + app.radio.how + " · " + app.radio.rawBytes + " bytes heard"
                 + "\n\nIf packets show as sent in the log but the radio never keys up, the app may be on the wrong port: try Change port. "
                 + "On the right one the radio's screen shows a small link icon next to the power level.\n"
                 + "\nPackets received: " + app.radio.rxCount + "\nPackets sent: " + app.radio.txCount

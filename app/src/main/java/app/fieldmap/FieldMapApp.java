@@ -465,6 +465,25 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         }
     };
 
+    /**
+     * Link test: hands one short packet straight to the radio and logs the exact bytes.
+     * Returns null if sent, otherwise why not.
+     */
+    public String linkTest() {
+        if (!radio.isConnected()) return "radio not connected";
+        if (!hasCallsign()) return gmrs() ? "GMRS callsign / unit name not set" : "callsign not set";
+        String info = Aprs.message(group(), "LINK TEST", null);
+        Ax25 f = gmrs() ? Ax25.ui(gmrsUnit(), Gmrs.destFor(gmrsCall()), new ArrayList<String>(), info)
+                : Ax25.ui(myCall(), TOCALL, new ArrayList<String>(), info);
+        byte[] k = Kiss.encode(f.encode());
+        StringBuilder hx = new StringBuilder();
+        for (byte b : k) hx.append(String.format("%02X", b & 0xFF));
+        boolean ok = radio.send(k);
+        if (ok && gmrs()) gmrsQueue.markSent(android.os.SystemClock.elapsedRealtime());
+        log("LINK TEST via " + radio.how + (ok ? " sent " : " FAILED ") + k.length + " bytes: " + hx);
+        return ok ? null : "the Bluetooth link dropped";
+    }
+
     /** Seconds until GMRS may transmit again (0 = now). */
     public int gmrsWaitSeconds() {
         return (int) Math.ceil(gmrsQueue.waitMs(android.os.SystemClock.elapsedRealtime()) / 1000.0);
