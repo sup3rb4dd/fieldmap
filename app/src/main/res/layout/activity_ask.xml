@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <TextView
+        android:id="@+id/askHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/hud_panel"
+        android:padding="12dp"
+        android:textColor="@color/accent"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.05" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/hud_panel"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="10dp">
+        <TextView style="@style/HudLabel" android:text="&gt; " android:textColor="@color/accent" android:textSize="16sp" />
+        <EditText
+            android:id="@+id/askInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@null"
+            android:hint="ASK LANTERN_"
+            android:imeOptions="actionSearch"
+            android:inputType="text"
+            android:maxLength="100"
+            android:textColor="@color/accent"
+            android:textColorHint="@color/dim" />
+        <Button
+            android:id="@+id/askGo"
+            style="@style/BarButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="[ SEARCH ]" />
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/askScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="6dp"
+        android:layout_marginBottom="6dp"
+        android:fillViewport="true">
+        <LinearLayout
+            android:id="@+id/askBody"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="4dp" />
+    </ScrollView>
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none">
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <Button android:id="@+id/askMore" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="0dp" android:text="MORE" />
+            <Button android:id="@+id/askSections" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SECTIONS" />
+            <Button android:id="@+id/askResults" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RESULTS" />
+            <Button android:id="@+id/askSaved" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SAVED" />
+            <Button android:id="@+id/askGateway" style="@style/BarButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="GATEWAY" />
+        </LinearLayout>
+    </HorizontalScrollView>
+</LinearLayout>

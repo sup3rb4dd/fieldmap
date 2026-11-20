@@ -21,6 +21,7 @@ A simple, free, ATAK-style map for Android that talks to your **BTECH UV-PRO** (
 - **Backup / restore** of places, waypoints and settings to a file
 - **Severe weather**: National Weather Service warnings for your location, with warning areas drawn on the map (needs internet)
 - **Background mode and alerts**: radios stay linked with the screen off; auto-reconnect when the app opens
+- **Ask Lantern**: search an offline library (Wikipedia, medical and repair guides, books) over Meshtastic, through a [Lantern](https://github.com/sup3rb4dd/lantern) drive with Lantern Relay turned on. Answers are saved on the phone to read again with no signal
 - Raw packet log for troubleshooting
 
 ## Install
@@ -43,6 +44,13 @@ Transmitting APRS uses amateur frequencies and requires an amateur radio license
 2. In FieldMap tap **RADIO ▸ Meshtastic**, pick your node. If Android asks for a PIN, use the one on the node's screen (default 123456).
 3. Nodes with positions appear on the map in purple, waypoints show as pins, and channel messages land in Chat.
 Pins you share and team chat go out on every connected radio. Your position goes to the mesh at most every 5 minutes to save airtime.
+
+## Ask Lantern
+1. Set up a gateway: a Meshtastic node with 🤖 in its name, on your team's channel, plugged into a PC running Lantern with **Relay** turned on and your node on its allowed list (see Lantern's RELAY.md).
+2. Connect your own Meshtastic node in FieldMap, then open ☰ ▸ **Ask Lantern**. FieldMap picks the 🤖 node automatically. Tap **GATEWAY** to choose a different one.
+3. Type a question and tap **SEARCH**. Tap a result to read it, **MORE** for the next part, **SECTIONS** to jump around, and **SAVED** to reread earlier answers offline.
+
+Questions are direct messages to the gateway node, and its answers stay out of team chat. Each answer comes in a few short messages, so give it a minute on a busy mesh. Ask Lantern works over Meshtastic only, not GMRS: automated replies are a gray area under the GMRS rules.
 
 ## Building
 GitHub Actions builds the APK on every push to `main` (see `.github/workflows/build.yml`).

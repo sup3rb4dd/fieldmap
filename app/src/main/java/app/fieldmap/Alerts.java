@@ -27,6 +27,7 @@ public final class Alerts {
     private static int nextId = 100;
     /** True while the chat screen is open (no message popups then). */
     public static boolean chatVisible = false;
+    public static boolean askVisible = false;
     private static final Set<String> overdueAlerted = new HashSet<>();
 
     public static void createChannels(Context ctx) {
@@ -119,6 +120,13 @@ public final class Alerts {
         FieldMapApp app = FieldMapApp.get();
         if (!app.prefs.getBoolean("alertMsg", true) || chatVisible) return;
         post(ctx, (direct ? "MSG ▸ YOU · " : "MSG ▸ NET · ") + from.toUpperCase(Locale.US), text, ChatActivity.class, 10);
+    }
+
+    /** An answer from Lantern arrived while the Ask Lantern screen was closed. */
+    public static void ask(Context ctx, String title, String text) {
+        FieldMapApp app = FieldMapApp.get();
+        if (!app.prefs.getBoolean("alertMsg", true)) return;
+        post(ctx, "LANTERN ▸ " + title.toUpperCase(Locale.US), text, AskActivity.class, 12);
     }
 
     public static void waypoint(Context ctx, String from, String name) {

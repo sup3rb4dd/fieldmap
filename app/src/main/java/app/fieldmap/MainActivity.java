@@ -1530,10 +1530,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         final String RADIOS = "Radios and TAK link", CHK = "Check in: send OK + my grid",
                 POS = "Send my position now", DRAW = "Draw a route or zone",
                 LOS = "Line of sight: me → crosshair", DL = "Download this area for offline",
-                FILES = "Files: import, trail, backup", WX = "Weather alerts", CLR = "Clear heard stations",
+                FILES = "Files: import, trail, backup", WX = "Weather alerts", ASK = "Ask Lantern (offline library)", CLR = "Clear heard stations",
                 LOG = "Packet log", DIAG = "Map diagnostics", SET = "Settings",
                 BAT = "Keep running in background (battery)", HELP = "Help";
-        final String[] items = {RADIOS, CHK, POS, DRAW, LOS, DL, FILES, WX, CLR, LOG, DIAG, BAT, SET, HELP};
+        final String[] items = {RADIOS, CHK, POS, DRAW, LOS, DL, ASK, FILES, WX, CLR, LOG, DIAG, BAT, SET, HELP};
         new AlertDialog.Builder(this)
                 .setItems(items, (d, which) -> {
                     String a = items[which];
@@ -1547,6 +1547,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         tools.terrainTo(c.getLatitude(), c.getLongitude(), "Crosshair");
                     }
                     else if (a.equals(DL)) downloadArea();
+                    else if (a.equals(ASK)) startActivity(new Intent(this, AskActivity.class));
                     else if (a.equals(FILES)) filesMenu();
                     else if (a.equals(WX)) weatherMenu();
                     else if (a.equals(CLR)) { app.store.clearStations(); app.sosFrom.clear(); refreshMarkers(); }

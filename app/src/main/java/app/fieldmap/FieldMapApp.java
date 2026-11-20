@@ -47,6 +47,8 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public RadioLink radio;
     public MeshLink mesh;
     public Location lastLoc;
+    /** Ask Lantern: questions to a Lantern Relay gateway node and the saved answers. */
+    public Asker ask;
 
     /** Meshtastic: my node number and the names of nodes we know. */
     public int myNodeNum = 0;
@@ -94,6 +96,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         weather = new Weather(this);
         elev = new Elevation(this);
         tak = new TakLink(this, this);
+        ask = new Asker(this);
         main.postDelayed(overdueTask, 60_000);
         // an SOS keeps going if Android closed the app while it was transmitting
         long st = prefs.getLong("sosStarted", 0);
@@ -665,7 +668,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         return ok;
     }
 
-    private int newPacketId() { return rnd.nextInt(Integer.MAX_VALUE - 1) + 1; }
+    int newPacketId() { return rnd.nextInt(Integer.MAX_VALUE - 1) + 1; }
 
     public boolean sharePin(Store.Pin p, boolean live) {
         if (p.place && live) { log("Not sent: " + p.name + " is a private saved place"); return false; }
@@ -868,6 +871,16 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         return false;
     }
 
+    /** Meshtastic nodes heard so far, as {"!a1b2c3d4", name}. */
+    public List<String[]> meshNodes() {
+        List<String[]> out = new ArrayList<>();
+        for (Map.Entry<Integer, String> e : nodeNames.entrySet()) {
+            if (e.getKey() != myNodeNum) out.add(new String[]{Mesh.nodeId(e.getKey()), e.getValue()});
+        }
+        out.sort((a, b) -> a[1].compareToIgnoreCase(b[1]));
+        return out;
+    }
+
     private String nodeNameFor(String key) {
         if (key != null && key.startsWith("!")) {
             try { return nodeNames.get((int) Long.parseLong(key.substring(1), 16)); } catch (NumberFormatException ignored) { }
@@ -1023,6 +1036,11 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
                     log("MESH RX text on other channel " + e.channel + " (ignored)");
                     break;
                 }
+                if (!broadcast && ask.isGateway(fromId)) {
+                    // an answer from Lantern Relay: it goes to Ask Lantern, not team chat
+                    ask.onReply(e.text);
+                    break;
+                }
                 log("MESH RX text " + displayName(fromId) + ": " + e.text);
                 // an SOS repeats every 2 minutes: keep one line in chat, not thirty
                 Shapes.Shared shp = Shapes.parseShared(e.text);
@@ -1044,6 +1062,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
             }
             case ROUTING:
                 // a receipt for something I sent
+                if (e.requestId != 0) ask.onAck(e.requestId, e.routingError);
                 if (e.requestId != 0 && e.routingError == 0
                         && store.ackMesh("m" + Integer.toHexString(e.requestId), fromId)) notifyData();
                 break;
