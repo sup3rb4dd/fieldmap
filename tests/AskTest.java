@@ -46,6 +46,15 @@ public class AskTest {
     check(Ask.parse("hey are you there").kind==Ask.Kind.OTHER,"other");
     check(Ask.looksLikeGateway("Lantern Relay 🤖")&&Ask.looksLikeGateway("Base 🤖")&&!Ask.looksLikeGateway("Elijah"),"gateway names");
     check(Ask.search("  water filter ").equals("?s water filter")&&Ask.go(3).equals("?go 3")&&Ask.open(2).equals("?2"),"commands");
+    // Lantern 1.6.4+ numbers section headings, and PDF books open on a page
+    Ask.Article pdf=new Ask.Article("Emergency Water Treatment","Water");
+    pdf.add(Ask.parse("[1/2] \u00a73 p.3 Disinfecting with bleach\nAdd 8 drops of bleach per gallon."),0);
+    check(pdf.secs.containsKey(3)&&!pdf.secs.containsKey(0)&&pdf.sectionTitle(3).equals("p.3 Disinfecting with bleach")&&pdf.current==3,"numbered heading wins over expected section: "+pdf.secs.keySet());
+    pdf.add(Ask.parse("[2/2] Stir and wait 30 minutes."),-1);
+    pdf.add(Ask.parse("[1/1] \u00a74 p.4 Storage\nOne gallon per person per day."),-1);
+    check(pdf.current==4&&pdf.text().contains("\u00a7 P.3 DISINFECTING WITH BLEACH\nAdd 8 drops of bleach per gallon. Stir and wait 30 minutes.")&&pdf.text().contains("\u00a7 P.4 STORAGE"),"pdf pages in order: "+pdf.text());
+    Ask.Article wiki=new Ask.Article("W","Wiki"); wiki.add(Ask.parse("[1/1] \u00a72 Boiling\nBoil it."),-1);
+    check(wiki.secs.containsKey(2)&&wiki.sectionTitle(2).equals("Boiling"),"numbered wiki section");
     System.out.println(fails==0?"AskTest OK":"AskTest "+fails+" failures");
   }
 }

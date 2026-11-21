@@ -65,6 +65,7 @@ public final class Ask {
     private static final Pattern RESULT = Pattern.compile("^(\\d+) (.+) \\[([^\\]]+)\\]$");
     private static final Pattern PART = Pattern.compile("^\\[(\\d+)/(\\d+)\\] ?(.*)$", Pattern.DOTALL);
     private static final Pattern TOC = Pattern.compile("^☰ (\\d+)/(\\d+)\\n?(.*)$", Pattern.DOTALL);
+    private static final Pattern SECTION_HEAD = Pattern.compile("^\u00a7(\\d+)? ?(.*)$", Pattern.DOTALL);
     private static final Pattern TOC_LINE = Pattern.compile("^(\\d+) (.+)$");
     private static final String SEARCH_MARK = "🔎 "; // 🔎
 
@@ -154,10 +155,12 @@ public final class Ask {
             int idx = current;
             String secTitle = null;
             if (r.part == 1 && r.heading != null) {
-                if (r.heading.startsWith("§ ")) { // "§ Name"
-                    secTitle = r.heading.substring(2).trim();
+                Matcher h = SECTION_HEAD.matcher(r.heading);
+                if (h.matches()) { // "§3 Name" (or "§ Name" from older Lantern versions)
+                    secTitle = h.group(2).trim();
                     int known = sectionNumber(secTitle);
-                    idx = expectSection >= 0 ? expectSection : known >= 0 ? known : current + 1;
+                    idx = h.group(1) != null ? Integer.parseInt(h.group(1))
+                            : expectSection >= 0 ? expectSection : known >= 0 ? known : current + 1;
                 } else {
                     // section 0 starts with "Title [Source]"
                     idx = 0;
