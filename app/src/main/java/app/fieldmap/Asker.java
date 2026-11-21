@@ -53,12 +53,13 @@ public class Asker {
 
     // ---------- the gateway node ----------
 
-    /** The chosen gateway's node id ("!a1b2c3d4"), or the first node whose name looks like one, or "". */
+    /**
+     * The gateway node the user picked ("!a1b2c3d4"), or "" until they pick one.
+     * Never guessed: a stranger's node named "... Relay" nearby would otherwise
+     * get the questions.
+     */
     public String gateway() {
-        String g = app.prefs.getString("askGateway", "");
-        if (!g.isEmpty()) return g;
-        for (String[] n : app.meshNodes()) if (Ask.looksLikeGateway(n[1])) return n[0];
-        return "";
+        return app.prefs.getString("askGateway", "");
     }
 
     public void setGateway(String id) {

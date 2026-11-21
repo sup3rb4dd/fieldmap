@@ -47,7 +47,7 @@ Pins you share and team chat go out on every connected radio. Your position goes
 
 ## Ask Lantern
 1. Set up a gateway: a Meshtastic node with 🤖 in its name, on your team's channel, plugged into a PC running Lantern with **Relay** turned on and your node on its allowed list (see Lantern's RELAY.md).
-2. Connect your own Meshtastic node in FieldMap, then open ☰ ▸ **Ask Lantern**. FieldMap picks the 🤖 node automatically. Tap **GATEWAY** to choose a different one.
+2. Connect your own Meshtastic node in FieldMap, then open ☰ ▸ **Ask Lantern** and tap **PICK YOUR LANTERN GATEWAY NODE**. Nodes named with 🤖, "Lantern" or "Relay" are marked ◆, but pick your own team's: FieldMap never guesses, so questions can't go to a stranger's node. **GATEWAY** changes it later.
 3. Type a question and tap **SEARCH**. Tap a result to read it, **MORE** for the next part, **SECTIONS** to jump around, and **SAVED** to reread earlier answers offline.
 
 Questions are direct messages to the gateway node, and its answers stay out of team chat. Each answer comes in a few short messages, so give it a minute on a busy mesh. Ask Lantern works over Meshtastic only, not GMRS: automated replies are a gray area under the GMRS rules.

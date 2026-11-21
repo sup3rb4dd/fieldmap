@@ -134,6 +134,7 @@ public class AskActivity extends AppCompatActivity implements FieldMapApp.Listen
         if (ask.query.isEmpty() && ask.results.isEmpty()) {
             addLine("Search the offline library on a Lantern drive: Wikipedia, medical and repair guides, books.", R.color.text, 15, false);
             addLine("Questions go over Meshtastic as a direct message to the Lantern gateway node. Answers arrive a few lines at a time, so give it a minute. Everything you read is saved under SAVED.", R.color.dim, 13, false);
+            if (ask.gateway().isEmpty()) addButton("◆ PICK YOUR LANTERN GATEWAY NODE", v -> gatewayDialog());
             return;
         }
         addLine("// RESULTS ▸ " + ask.query.toUpperCase(Locale.US), R.color.dim, 12, true);
@@ -228,7 +229,7 @@ public class AskActivity extends AppCompatActivity implements FieldMapApp.Listen
         for (String[] n : nodes) labels.add((Ask.looksLikeGateway(n[1]) ? "◆ " : "  ") + n[1] + "  " + n[0] + (n[0].equalsIgnoreCase(cur) ? "  ✓" : ""));
         labels.add("Type a node ID…");
         new AlertDialog.Builder(this)
-                .setTitle("// LANTERN GATEWAY NODE")
+                .setTitle(cur.isEmpty() ? "// PICK YOUR LANTERN GATEWAY  (◆ = likely)" : "// LANTERN GATEWAY NODE  (◆ = likely)")
                 .setItems(labels.toArray(new String[0]), (d, which) -> {
                     if (which < nodes.size()) { ask.setGateway(nodes.get(which)[0]); render(); }
                     else typeGateway();
