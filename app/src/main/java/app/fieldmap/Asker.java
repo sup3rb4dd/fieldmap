@@ -30,6 +30,7 @@ public class Asker {
     public String query = "";
     public final List<Ask.Result> results = new ArrayList<>();
     public boolean noMatches;
+    public String answer = "";      // AI helper's short answer for the current question
     public Ask.Article article;     // what's being read (live or saved)
     public boolean offline;         // reading a saved copy, not asking the gateway
     public int mode = MODE_RESULTS;
@@ -98,9 +99,37 @@ public class Asker {
         String err = send(Ask.search(words));
         if (err != null) return err;
         query = words.trim();
+        answer = "";
         results.clear();
         noMatches = false;
         mode = MODE_RESULTS;
+        return null;
+    }
+
+    /** A plain question; Lantern's AI helper finds the pages (and maybe answers). */
+    public String ask(String question) {
+        String err = send(Ask.ask(question));
+        if (err != null) return err;
+        query = question.trim();
+        answer = "";
+        results.clear();
+        noMatches = false;
+        mode = MODE_RESULTS;
+        return null;
+    }
+
+    /** A command typed as-is, like "?s knots" or "?help". */
+    public String command(String cmd) {
+        String err = send(cmd.trim());
+        if (err != null) return err;
+        String c = cmd.trim().toLowerCase(Locale.US);
+        if (c.startsWith("?s ") || c.startsWith("?search ")) {
+            query = cmd.trim().substring(c.indexOf(' ') + 1).trim();
+            answer = "";
+            results.clear();
+            noMatches = false;
+            mode = MODE_RESULTS;
+        }
         return null;
     }
 
@@ -183,6 +212,10 @@ public class Asker {
                 break;
             case SECTIONS:
                 if (article != null) { article.addSections(r); keep(article); }
+                break;
+            case ANSWER:
+                answer = answer.isEmpty() ? r.text : answer + " " + r.text;
+                mode = MODE_RESULTS;
                 break;
             case NOTICE:
             case OTHER:

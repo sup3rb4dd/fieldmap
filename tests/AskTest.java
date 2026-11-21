@@ -44,6 +44,11 @@ public class AskTest {
     check(r.kind==Ask.Kind.NOTICE&&r.text.equals("search first: ?s words"),"notice");
     check(Ask.parse("Lantern Relay: ?s words = search.").kind==Ask.Kind.NOTICE,"help is a notice");
     check(Ask.parse("hey are you there").kind==Ask.Kind.OTHER,"other");
+    r=Ask.parse("🤖 Clean with running water. Deep or gaping cuts need a doctor. (from 1)");
+    check(r.kind==Ask.Kind.ANSWER&&r.text.equals("Clean with running water. Deep or gaping cuts need a doctor. (from 1)"),"ai answer "+r.kind);
+    r=Ask.parse("🔎 I have a small cut, how do I close it\n1 Wound closure [Med]\n2 First Aid p.48 [Wikibooks]");
+    check(r.kind==Ask.Kind.RESULTS&&r.results.size()==2&&r.results.get(1).title.equals("First Aid p.48"),"results after ai answer");
+    check(Ask.ask("  how do I close a cut ").equals("?ask how do I close a cut"),"ask command");
     check(Ask.looksLikeGateway("Lantern Relay 🤖")&&Ask.looksLikeGateway("Base 🤖")&&!Ask.looksLikeGateway("Elijah"),"gateway names");
     check(Ask.search("  water filter ").equals("?s water filter")&&Ask.go(3).equals("?go 3")&&Ask.open(2).equals("?2"),"commands");
     // Lantern 1.6.4+ numbers section headings, and PDF books open on a page

@@ -19,6 +19,8 @@ public final class Ask {
     // ---------- commands (sent as direct messages to the gateway node) ----------
 
     public static String search(String words) { return "?s " + words.trim(); }
+    /** A plain question for Lantern's AI helper (a keyword search if the gateway has no AI). */
+    public static String ask(String question) { return "?ask " + question.trim(); }
     public static String open(int n) { return "?" + n; }
     public static String more() { return "?more"; }
     public static String toc() { return "?toc"; }
@@ -33,7 +35,7 @@ public final class Ask {
 
     // ---------- replies ----------
 
-    public enum Kind { RESULTS, PART, SECTIONS, NOTICE, OTHER }
+    public enum Kind { RESULTS, PART, SECTIONS, ANSWER, NOTICE, OTHER }
 
     public static final class Result {
         public int num;
@@ -69,6 +71,7 @@ public final class Ask {
     private static final Pattern LIST_ITEM = Pattern.compile("^(\u2022 |\\(?[0-9]{1,2}[.)] |\\(?[a-zA-Z][.)] )");
     private static final Pattern TOC_LINE = Pattern.compile("^(\\d+) (.+)$");
     private static final String SEARCH_MARK = "🔎 "; // 🔎
+    private static final String ANSWER_MARK = "🤖 "; // 🤖 short AI answer from the top result
 
     public static Reply parse(String msg) {
         Reply r = new Reply();
@@ -82,6 +85,11 @@ public final class Ask {
                 if (m.matches()) r.results.add(new Result(Integer.parseInt(m.group(1)), m.group(2), m.group(3)));
                 else if (lines[i].startsWith("No matches")) r.noMatches = true;
             }
+            return r;
+        }
+        if (msg.startsWith(ANSWER_MARK)) {
+            r.kind = Kind.ANSWER;
+            r.text = msg.substring(ANSWER_MARK.length()).trim();
             return r;
         }
         Matcher m = PART.matcher(msg);

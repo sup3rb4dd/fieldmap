@@ -86,7 +86,7 @@ public class AskActivity extends AppCompatActivity implements FieldMapApp.Listen
     private void doSearch() {
         String q = input.getText().toString().trim();
         if (q.isEmpty()) return;
-        String err = ask.search(q);
+        String err = q.startsWith("?") ? ask.command(q) : ask.ask(q);
         if (err == null) {
             input.setText("");
             hideKeyboard();
@@ -132,10 +132,15 @@ public class AskActivity extends AppCompatActivity implements FieldMapApp.Listen
 
     private void renderResults() {
         if (ask.query.isEmpty() && ask.results.isEmpty()) {
-            addLine("Search the offline library on a Lantern drive: Wikipedia, medical and repair guides, books.", R.color.text, 15, false);
+            addLine("Ask the offline library on a Lantern drive: Wikipedia, medical and repair guides, books. Plain questions work, like \"I have a small cut, how do I close it\".", R.color.text, 15, false);
+            addLine("If the Lantern PC has its AI helper set up, you get a short answer plus the pages it came from. Otherwise you get the best matching pages. Type ?s words for a plain keyword search.", R.color.dim, 13, false);
             addLine("Questions go over Meshtastic as a direct message to the Lantern gateway node. Answers arrive a few lines at a time, so give it a minute. Everything you read is saved under SAVED.", R.color.dim, 13, false);
             if (ask.gateway().isEmpty()) addButton("◆ PICK YOUR LANTERN GATEWAY NODE", v -> gatewayDialog());
             return;
+        }
+        if (!ask.answer.isEmpty()) {
+            addLine("// AI ANSWER ▸ CHECK THE SOURCE", R.color.dim, 12, true);
+            addLine(ask.answer, R.color.text, 16, false);
         }
         addLine("// RESULTS ▸ " + ask.query.toUpperCase(Locale.US), R.color.dim, 12, true);
         if (ask.noMatches) addLine("No matches. Try fewer or different words.", R.color.warn, 15, false);
