@@ -2,6 +2,23 @@
 
 A simple, free, ATAK-style map for Android that talks to your **BTECH UV-PRO** (APRS over Bluetooth KISS TNC) and **Meshtastic** radios like the Heltec V4 — at the same time if you want.
 
+## Works with Lantern
+
+FieldMap pairs with [Lantern](https://github.com/sup3rb4dd/lantern), an offline library on a thumb
+drive (Wikipedia, medical references, repair guides, survival manuals and maps) that runs on any
+Windows PC with no internet. With a Meshtastic node attached, Lantern becomes a reference desk your
+team can reach over the mesh:
+
+```
+FieldMap (phone) ──Bluetooth── your Meshtastic node ~~~ mesh ~~~ gateway node 🤖 ──USB/WiFi── PC running Lantern
+```
+
+From the field, type a question on FieldMap's **Ask Lantern** screen, like `bleach drops per gallon`.
+Lantern searches its whole library, including inside its PDF guides, and radios back a short
+answer a few messages at a time. Everything you receive is saved on the phone to read again with no
+signal. Setup is below under [Ask Lantern](#ask-lantern); Lantern's side is in its
+[RELAY.md](https://github.com/sup3rb4dd/lantern/blob/main/RELAY.md).
+
 ## Features
 - Map with your GPS position and an **MGRS** readout for you and the map center
 - **Offline maps**: USGS Topo and HD Satellite (NAIP imagery to zoom 19), download any area for use without cell service
