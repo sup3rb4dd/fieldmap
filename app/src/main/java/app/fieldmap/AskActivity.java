@@ -158,9 +158,13 @@ public class AskActivity extends AppCompatActivity implements FieldMapApp.Listen
             String head = e.getKey() == 0 ? "§ SUMMARY" : "§ " + s.title.toUpperCase(Locale.US);
             head += "   " + s.received() + "/" + s.parts.length;
             addLine(head, R.color.dim, 12, true);
-            addLine(Ask.Article.sectionText(s), R.color.text, 16, false);
+            String body = Ask.Article.sectionText(s);
+            if (!body.isEmpty()) addLine(body, R.color.text, 16, false);
+            int left = Ask.Article.notYetSent(s);
+            if (left > 0) addLine("▸ " + left + " more part" + (left == 1 ? "" : "s") + " in this section"
+                    + (ask.offline ? "" : ": tap MORE"), R.color.dim, 12, false);
         }
-        if (!ask.offline) addLine(a.currentIncomplete() ? "More parts on the way, or tap MORE." : "Tap MORE to keep reading, or SECTIONS to jump.", R.color.dim, 12, false);
+        if (!ask.offline && !a.currentIncomplete()) addLine("Tap MORE for the next section, or SECTIONS to jump.", R.color.dim, 12, false);
     }
 
     private void renderSections() {

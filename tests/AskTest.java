@@ -21,6 +21,8 @@ public class AskTest {
     art.add(Ask.parse("[3/3] industrial applications."),-1);
     check(art.text().contains("chemicals. [… missing …] industrial"),"gap marked: "+art.text());
     check(art.currentIncomplete(),"incomplete");
+    Ask.Article early=new Ask.Article("T","Wiki"); early.add(Ask.parse("[1/12] T [Wiki]\nFirst part."),0);
+    check(Ask.Article.sectionText(early.secs.get(0)).equals("First part.")&&Ask.Article.notYetSent(early.secs.get(0))==11,"unsent parts aren't shown as missing: "+early.text());
     art.add(Ask.parse("[2/3] The goal is water fit for purpose."),-1);
     check(!art.currentIncomplete()&&art.text().equals("Water purification is the process of removing undesirable chemicals. The goal is water fit for purpose. industrial applications."),"whole summary: "+art.text());
 

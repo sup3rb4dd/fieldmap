@@ -214,13 +214,26 @@ public final class Ask {
             return b.toString();
         }
 
+        /**
+         * The text of a section as received so far. A part that never arrived between
+         * two that did is marked as missing; parts not sent yet are left off (see notYetSent).
+         */
         public static String sectionText(Sec s) {
+            int last = -1;
+            for (int i = 0; i < s.parts.length; i++) if (s.parts[i] != null) last = i;
             StringBuilder b = new StringBuilder();
-            for (String p : s.parts) {
+            for (int i = 0; i <= last; i++) {
                 if (b.length() > 0) b.append(' ');
-                b.append(p == null ? "[… missing …]" : p);
+                b.append(s.parts[i] == null ? "[\u2026 missing \u2026]" : s.parts[i]);
             }
             return b.toString();
+        }
+
+        /** Parts after the last one received: what MORE will bring. */
+        public static int notYetSent(Sec s) {
+            int last = -1;
+            for (int i = 0; i < s.parts.length; i++) if (s.parts[i] != null) last = i;
+            return s.parts.length - 1 - last;
         }
 
         /** True if the current section still has parts the gateway hasn't sent. */
