@@ -55,6 +55,11 @@ public class AskTest {
     check(pdf.current==4&&pdf.text().contains("\u00a7 P.3 DISINFECTING WITH BLEACH\nAdd 8 drops of bleach per gallon. Stir and wait 30 minutes.")&&pdf.text().contains("\u00a7 P.4 STORAGE"),"pdf pages in order: "+pdf.text());
     Ask.Article wiki=new Ask.Article("W","Wiki"); wiki.add(Ask.parse("[1/1] \u00a72 Boiling\nBoil it."),-1);
     check(wiki.secs.containsKey(2)&&wiki.sectionTitle(2).equals("Boiling"),"numbered wiki section");
+    Ask.Article list=new Ask.Article("Burns","Book");
+    list.add(Ask.parse("[1/3] \u00a754 p.54\nDon't do this!\n\u2022 Apply ice"),-1);
+    list.add(Ask.parse("[2/3] \u2022 Break blisters."),-1);
+    list.add(Ask.parse("[3/3] 2. Call EMS and keep it cool."),-1);
+    check(Ask.Article.sectionText(list.secs.get(54)).equals("Don't do this!\n\u2022 Apply ice\n\u2022 Break blisters.\n2. Call EMS and keep it cool."),"list items across messages: "+Ask.Article.sectionText(list.secs.get(54)));
     System.out.println(fails==0?"AskTest OK":"AskTest "+fails+" failures");
   }
 }

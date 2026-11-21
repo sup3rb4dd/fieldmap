@@ -66,6 +66,7 @@ public final class Ask {
     private static final Pattern PART = Pattern.compile("^\\[(\\d+)/(\\d+)\\] ?(.*)$", Pattern.DOTALL);
     private static final Pattern TOC = Pattern.compile("^☰ (\\d+)/(\\d+)\\n?(.*)$", Pattern.DOTALL);
     private static final Pattern SECTION_HEAD = Pattern.compile("^\u00a7(\\d+)? ?(.*)$", Pattern.DOTALL);
+    private static final Pattern LIST_ITEM = Pattern.compile("^(\u2022 |\\(?[0-9]{1,2}[.)] |\\(?[a-zA-Z][.)] )");
     private static final Pattern TOC_LINE = Pattern.compile("^(\\d+) (.+)$");
     private static final String SEARCH_MARK = "🔎 "; // 🔎
 
@@ -226,8 +227,10 @@ public final class Ask {
             for (int i = 0; i < s.parts.length; i++) if (s.parts[i] != null) last = i;
             StringBuilder b = new StringBuilder();
             for (int i = 0; i <= last; i++) {
-                if (b.length() > 0) b.append(' ');
-                b.append(s.parts[i] == null ? "[\u2026 missing \u2026]" : s.parts[i]);
+                String p = s.parts[i] == null ? "[\u2026 missing \u2026]" : s.parts[i];
+                // a part that starts a list item starts a new line, as it did in the book
+                if (b.length() > 0) b.append(LIST_ITEM.matcher(p).find() ? '\n' : ' ');
+                b.append(p);
             }
             return b.toString();
         }
