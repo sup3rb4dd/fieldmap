@@ -34,6 +34,7 @@ signal. Setup is below under [Ask Lantern](#ask-lantern); Lantern's side is in i
 - **Check-in and quick messages**: "OK + my grid" in one tap; tap any grid in chat to see it on the map
 - **Steering arrow, ETA and compass**: track a waypoint or teammate and follow the arrow; hold N↑ for a heading-up map
 - **Trails**: your own breadcrumb track (export as GPX) and teammates' recent paths
+- **Repeaters on the map**: download any state's ham repeaters from [HearHam.live](https://hearham.com/repeaters) (free, once, then works offline), add your own, or import a CSV club list. Tap one for output and input frequencies, offset, tone, callsign, notes, and range and bearing from you
 - **Saved places**: private home/family markers that are never transmitted
 - **Backup / restore** of places, waypoints and settings to a file
 - **Severe weather**: National Weather Service warnings for your location, with warning areas drawn on the map (needs internet)
@@ -68,6 +69,16 @@ Pins you share and team chat go out on every connected radio. Your position goes
 3. Type a question and tap **SEARCH**. Tap a result to read it, **MORE** for the next part, **SECTIONS** to jump around, and **SAVED** to reread earlier answers offline.
 
 Questions are direct messages to the gateway node, and its answers stay out of team chat. Each answer comes in a few short messages, so give it a minute on a busy mesh. Ask Lantern works over Meshtastic only, not GMRS: automated replies are a gray area under the GMRS rules.
+
+## Repeaters
+☰ ▸ **Repeaters (ham & GMRS)**:
+- **Download a state** or **near me (100 mi)** pulls HearHam.live's free repeater list once (about 10 MB) and keeps just that area on the phone. A state's box includes repeaters just over its borders. Downloading the same state again refreshes it.
+- **Add one**: long-press the map ▸ **Repeater…**, or add one at the crosshair from the menu. Enter the output frequency, offset, tone and callsign.
+- **Import a CSV list** with a header row: `Output` (or `Frequency`), `Input` or `Offset`, `Tone`, `Callsign`, `Location`, `Notes`, `Latitude`, `Longitude`. CHIRP CSVs work if they have Latitude and Longitude columns. Rows without a position are skipped.
+
+Repeaters show once you zoom in (up to 200 nearest the middle of the screen): purple for ham, orange for GMRS, gray if listed as off the air. HearHam is a community list, so coverage varies by area; fill gaps with your own or a club's list. Your own repeaters go into backups.
+
+Repeater data from HearHam.live is shared by its community for use in apps like this one. FieldMap doesn't use RepeaterBook, whose terms don't allow repeater maps without written permission.
 
 ## Building
 GitHub Actions builds the APK on every push to `main` (see `.github/workflows/build.yml`).

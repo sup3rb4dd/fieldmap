@@ -650,7 +650,7 @@ class MapTools {
     // Importing KML / KMZ / GPX
     // =====================================================================
 
-    private String displayName(Uri uri) {
+    String displayName(Uri uri) {
         String name = null;
         try (android.database.Cursor c = a.getContentResolver().query(uri, null, null, null, null)) {
             if (c != null && c.moveToFirst()) {

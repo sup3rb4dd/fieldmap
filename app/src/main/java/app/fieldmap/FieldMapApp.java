@@ -60,6 +60,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
     public Weather weather;
     public Elevation elev;
     public TakLink tak;
+    public RepeaterStore repeaters;
     private final Map<String, String> takNames = new HashMap<>();
     private long lastTakBeacon = 0;
     /** True while the map screen is on top. */
@@ -97,6 +98,7 @@ public class FieldMapApp extends Application implements RadioLink.Callback, Mesh
         elev = new Elevation(this);
         tak = new TakLink(this, this);
         ask = new Asker(this);
+        repeaters = new RepeaterStore(this);
         main.postDelayed(overdueTask, 60_000);
         // an SOS keeps going if Android closed the app while it was transmitting
         long st = prefs.getLong("sosStarted", 0);

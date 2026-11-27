@@ -71,13 +71,14 @@ import app.fieldmap.core.Geo;
 import app.fieldmap.core.Gpx;
 import app.fieldmap.core.Mesh;
 import app.fieldmap.core.Mgrs;
+import app.fieldmap.core.Repeaters;
 
 @SuppressLint("MissingPermission")
 public class MainActivity extends AppCompatActivity implements FieldMapApp.Listener {
 
     private static final int REQ_LOCATION = 1, REQ_BT = 2, REQ_MESH = 3;
     private static final int REQ_BACKUP = 21, REQ_RESTORE = 22, REQ_GPX = 23;
-    static final int REQ_IMPORT = 24, REQ_MBTILES = 25;
+    static final int REQ_IMPORT = 24, REQ_MBTILES = 25, REQ_RPT_CSV = 26;
 
     FieldMapApp app;
     MapView map;
@@ -85,6 +86,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private MyLocationNewOverlay myLocOverlay;
     private Polyline rangeLine;
     private final List<Overlay> itemOverlays = new ArrayList<>();
+    private final List<Overlay> rptOverlays = new ArrayList<>();
+    private String rptDrawn = "";
+    private final Runnable rptRefresh = this::refreshRepeaters;
     private TextView tvMe, tvCenter, tvTarget, radioStatus, tvClock;
     private LinearLayout targetRow;
     private Button btnChat;
@@ -104,7 +108,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
     private float heading = Float.NaN;
     private boolean headingUp = false;
 
-    // selected target: "pin:<id>" or "sta:<call>" or "pt:<lat>,<lon>"
+    // selected target: "pin:<id>" or "sta:<call>" or "pt:<lat>,<lon>" or "rpt:<repeater id>"
     // routes being followed: "rte:<point index>:<shape id>"
     String target;
 
@@ -303,10 +307,11 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         map.getOverlays().add(myLocOverlay);
 
         map.addMapListener(new MapListener() {
-            @Override public boolean onScroll(ScrollEvent event) { updateCenterText(); tools.onMapMoved(); return false; }
-            @Override public boolean onZoom(ZoomEvent event) { updateCenterText(); tools.onMapMoved(); return false; }
+            @Override public boolean onScroll(ScrollEvent event) { updateCenterText(); tools.onMapMoved(); scheduleRepeaters(); return false; }
+            @Override public boolean onZoom(ZoomEvent event) { updateCenterText(); tools.onMapMoved(); scheduleRepeaters(); return false; }
         });
         refreshMarkers();
+        refreshRepeaters();
     }
 
     /**
@@ -553,6 +558,9 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         root.put("settings", st);
         root.put("pins", app.store.exportMyPins());
         root.put("shapes", app.store.exportMyShapes());
+        org.json.JSONArray rpts = new org.json.JSONArray();
+        for (Repeaters.Repeater r : app.repeaters.all()) if (r.mine()) rpts.put(Repeaters.toLine(r));
+        root.put("repeaters", rpts);
         return root.toString(2);
     }
 
@@ -578,6 +586,15 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         ed.apply();
                     }
                     int got = app.store.importPins(pins) + app.store.importShapes(root.optJSONArray("shapes"));
+                    org.json.JSONArray rpts = root.optJSONArray("repeaters");
+                    for (int i = 0; rpts != null && i < rpts.length(); i++) {
+                        Repeaters.Repeater r = Repeaters.fromLine(rpts.optString(i));
+                        if (r == null || !r.mine()) continue;
+                        app.repeaters.remove(r.id);
+                        app.repeaters.add(r);
+                        got++;
+                    }
+                    redrawRepeaters();
                     toast("Restored " + got + " places, waypoints and drawings" + (which == 1 ? " plus settings" : ""));
                     applyDetail();
                     app.applyTakSettings();
@@ -647,6 +664,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             else if (requestCode == REQ_RESTORE) restoreFrom(readText(data.getData()));
             else if (requestCode == REQ_IMPORT) tools.importFile(data.getData());
             else if (requestCode == REQ_MBTILES) tools.copyMbtiles(data.getData());
+            else if (requestCode == REQ_RPT_CSV) importRepeaterCsv(data.getData());
         } catch (Exception e) {
             toast("File problem: " + e.getMessage());
         }
@@ -971,7 +989,8 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                         + "• Long-press the map, or tap " + app.lbl("+WPT", "+PIN") + ", to drop a pin. Tap a pin or a teammate for distance, direction, and options.\n"
                         + "• " + app.lbl("POS", "ME") + " jumps to you. " + app.lbl("GRID", "GO TO") + " jumps to a grid you type. " + app.lbl("LYR", "MAP") + " changes the map type.\n"
                         + "• DRAW makes a route or a shaded zone. While drawing, hold a corner and then tap where it should go to move it.\n"
-                        + "• ≡ ▸ Download this area saves the map for use without internet.\n\n"
+                        + "• ≡ ▸ Download this area saves the map for use without internet.\n"
+                        + "• ≡ ▸ Repeaters downloads a state's ham repeaters from HearHam.live (once, then offline). Zoom in to see them; tap one for its frequencies, tone and distance. Long-press ▸ Repeater… adds your own.\n\n"
                         + "RADIOS\n"
                         + "• Tap the status line at the top to connect. ▲ means connected.\n"
                         + "• Meshtastic (Heltec): private if your team uses its own channel. Close the Meshtastic app first.\n"
@@ -1177,7 +1196,29 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         edge.setStyle(Paint.Style.STROKE);
         edge.setStrokeWidth(2 * d);
         float r = sym / 2f - 2 * d;
-        if (shape == 2) {
+        if (shape == 3) {
+            // radio tower: mast, legs and signal arcs
+            Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+            line.setStyle(Paint.Style.STROKE);
+            line.setStrokeCap(Paint.Cap.ROUND);
+            Path legs = new Path();
+            legs.moveTo(cx - r * 0.55f, cy + r); legs.lineTo(cx, cy - r * 0.45f); legs.lineTo(cx + r * 0.55f, cy + r);
+            legs.moveTo(cx - r * 0.3f, cy + r * 0.3f); legs.lineTo(cx + r * 0.3f, cy + r * 0.3f);
+            android.graphics.RectF in1 = new android.graphics.RectF(cx - r * 0.55f, cy - r * 1.0f, cx + r * 0.55f, cy + r * 0.1f);
+            android.graphics.RectF in2 = new android.graphics.RectF(cx - r * 1.0f, cy - r * 1.45f, cx + r * 1.0f, cy + r * 0.55f);
+            for (int pass = 0; pass < 2; pass++) {
+                line.setColor(pass == 0 ? Color.BLACK : color);
+                line.setStrokeWidth((pass == 0 ? 4.5f : 2f) * d);
+                c.drawPath(legs, line);
+                c.drawArc(in1, 200, 50, false, line);
+                c.drawArc(in1, 290, 50, false, line);
+                c.drawArc(in2, 205, 40, false, line);
+                c.drawArc(in2, 295, 40, false, line);
+            }
+            Paint top = new Paint(Paint.ANTI_ALIAS_FLAG);
+            top.setColor(color);
+            c.drawCircle(cx, cy - r * 0.45f, 2.2f * d, top);
+        } else if (shape == 2) {
             Path house = new Path();
             house.moveTo(cx, cy - r);                 // roof peak
             house.lineTo(cx + r, cy - r * 0.05f);
@@ -1216,6 +1257,350 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
         text.setColor(color);
         c.drawText(label, cx, ty, text);
         return new BitmapDrawable(getResources(), bmp);
+    }
+
+    // ---------- repeaters ----------
+
+    private static final int RPT_HAM = 0xFFB388FF, RPT_GMRS = 0xFFFF8A65;
+    private static final double RPT_MIN_ZOOM = 7.5;
+    private static final int RPT_MAX_SHOWN = 200;
+
+    boolean repeatersOn() { return app.prefs.getBoolean("repeaters", true); }
+
+    private void scheduleRepeaters() {
+        map.removeCallbacks(rptRefresh);
+        map.postDelayed(rptRefresh, 250);
+    }
+
+    /** Draws the repeaters in view (up to 200 nearest the middle). Only redraws when what's shown changes. */
+    void refreshRepeaters() {
+        if (map == null) return;
+        List<Repeaters.Repeater> shown = new ArrayList<>();
+        double zoom = map.getZoomLevelDouble();
+        if (repeatersOn() && zoom >= RPT_MIN_ZOOM) {
+            BoundingBox bb = map.getBoundingBox();
+            double padLat = (bb.getLatNorth() - bb.getLatSouth()) * 0.15, padLon = (bb.getLonEast() - bb.getLonWest()) * 0.15;
+            for (Repeaters.Repeater r : app.repeaters.all()) {
+                if (r.lat < bb.getLatSouth() - padLat || r.lat > bb.getLatNorth() + padLat) continue;
+                if (r.lon < bb.getLonWest() - padLon || r.lon > bb.getLonEast() + padLon) continue;
+                shown.add(r);
+            }
+            if (shown.size() > RPT_MAX_SHOWN) {
+                IGeoPoint c = map.getMapCenter();
+                double clat = c.getLatitude(), clon = c.getLongitude();
+                shown.sort((a, b) -> Double.compare(Geo.distance(clat, clon, a.lat, a.lon), Geo.distance(clat, clon, b.lat, b.lon)));
+                shown = new ArrayList<>(shown.subList(0, RPT_MAX_SHOWN));
+            }
+        }
+        boolean calls = zoom >= 11;
+        StringBuilder key = new StringBuilder(calls ? "c" : "f");
+        for (Repeaters.Repeater r : shown) key.append(r.id).append(',');
+        String k = key.toString();
+        if (k.equals(rptDrawn)) return;
+        rptDrawn = k;
+
+        map.getOverlays().removeAll(rptOverlays);
+        rptOverlays.clear();
+        for (Repeaters.Repeater r : shown) {
+            Marker m = new Marker(map);
+            m.setPosition(new GeoPoint(r.lat, r.lon));
+            int color = r.status == 0 ? Color.GRAY : r.gmrs() ? RPT_GMRS : RPT_HAM;
+            String label = Repeaters.mhz(r.outHz) + (calls && !r.callsign.isEmpty() ? " " + r.callsign : "");
+            m.setIcon(labelIcon(label, color, 3));
+            m.setAnchor(0.5f, iconAnchorY);
+            m.setInfoWindow(null);
+            final String id = r.id;
+            m.setOnMarkerClickListener((mk, mv) -> {
+                if (tools.drawing) return false;
+                repeaterTapped(id);
+                return true;
+            });
+            rptOverlays.add(m);
+        }
+        // under pins and team positions
+        int at = map.getOverlays().indexOf(myLocOverlay);
+        for (Overlay o : itemOverlays) {
+            int i = map.getOverlays().indexOf(o);
+            if (i >= 0 && (at < 0 || i < at)) at = i;
+        }
+        if (at < 0) at = map.getOverlays().size();
+        map.getOverlays().addAll(at, rptOverlays);
+        map.invalidate();
+    }
+
+    private void redrawRepeaters() {
+        rptDrawn = "";
+        refreshRepeaters();
+    }
+
+    private void repeaterTapped(String id) {
+        Repeaters.Repeater r = app.repeaters.get(id);
+        if (r == null) return;
+        StringBuilder b = new StringBuilder();
+        b.append("Output  ").append(Repeaters.mhz(r.outHz)).append(" MHz  (listen)\n");
+        b.append("Input   ").append(Repeaters.mhz(r.inHz())).append(" MHz  (").append(Repeaters.offset(r.offsetHz)).append(")\n");
+        b.append("Tone    ").append(Repeaters.toneText(r.toneTx));
+        if (!r.toneRx.equals(r.toneTx)) b.append("  ·  back: ").append(Repeaters.toneText(r.toneRx));
+        b.append("\nMode    ").append(r.mode).append(r.gmrs() ? "  ·  GMRS" : "  ·  Ham");
+        if (r.status == 0) b.append("\nStatus  listed as off the air or unknown");
+        b.append("\n\n").append(rangeFromMe(r.lat, r.lon));
+        b.append("\n").append(Mgrs.format(r.lat, r.lon));
+        if (!r.city.isEmpty()) b.append("\n").append(r.city);
+        if (!r.notes.isEmpty()) b.append("\n\n").append(r.notes);
+        b.append("\n\n").append(r.id.startsWith("hh:") ? "Data: HearHam.live" : r.mine() ? "Added by hand" : "Imported from " + r.region);
+
+        List<String> more = new ArrayList<>();
+        more.add("Copy output frequency");
+        if (r.id.startsWith("hh:")) more.add("Open on HearHam.live (internet)");
+        more.add("Edit");
+        more.add("Delete");
+        boolean tracking = ("rpt:" + id).equals(target);
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle(Repeaters.mhz(r.outHz) + (r.callsign.isEmpty() ? "" : "  ·  " + r.callsign))
+                .setMessage(b.toString())
+                .setPositiveButton(tracking ? "Stop track" : "Track", (d, w) -> {
+                    target = tracking ? null : "rpt:" + id;
+                    refreshTarget();
+                })
+                .setNegativeButton("Close", null)
+                .setNeutralButton("More…", (d, w) -> new AlertDialog.Builder(this)
+                        .setItems(more.toArray(new String[0]), (d2, which) -> {
+                            String a = more.get(which);
+                            if (a.startsWith("Copy")) {
+                                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("frequency", Repeaters.mhz(r.outHz)));
+                                toast("Copied " + Repeaters.mhz(r.outHz));
+                            } else if (a.startsWith("Open")) {
+                                try {
+                                    startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://hearham.com/repeaters/" + r.id.substring(3))));
+                                } catch (Exception e) { toast("No browser on this phone"); }
+                            } else if (a.equals("Edit")) {
+                                promptRepeater(r, r.lat, r.lon);
+                            } else if (a.equals("Delete")) {
+                                app.repeaters.remove(r.id);
+                                if (("rpt:" + r.id).equals(target)) { target = null; refreshTarget(); }
+                                redrawRepeaters();
+                            }
+                        }).show())
+                .show();
+        TextView msg = dlg.findViewById(android.R.id.message);
+        if (msg != null) msg.setTypeface(android.graphics.Typeface.MONOSPACE);
+    }
+
+    /** Add a repeater by hand at a spot (r == null), or edit one. */
+    private void promptRepeater(Repeaters.Repeater edit, double lat, double lon) {
+        float d = getResources().getDisplayMetrics().density;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (20 * d);
+        box.setPadding(pad, pad / 2, pad, 0);
+        TextView grid = new TextView(this);
+        grid.setText(Mgrs.format(lat, lon));
+        grid.setTypeface(android.graphics.Typeface.MONOSPACE);
+        box.addView(grid);
+        EditText out = field(box, "Output MHz (what you listen on), e.g. 146.820", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        EditText off = field(box, "Offset MHz: +0.6, -0.6, +5 (blank = standard)", InputType.TYPE_CLASS_TEXT);
+        EditText tone = field(box, "Tone, e.g. 151.4 or D023 (blank = none)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        EditText call = field(box, "Callsign", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        EditText where = field(box, "Location (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        EditText notes = field(box, "Notes (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        if (edit != null) {
+            out.setText(Repeaters.mhz(edit.outHz));
+            off.setText(Repeaters.offset(edit.offsetHz).replace("simplex", "0"));
+            tone.setText(edit.toneTx);
+            call.setText(edit.callsign);
+            where.setText(edit.city);
+            notes.setText(edit.notes);
+        }
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this)
+                .setTitle(edit == null ? "// ADD REPEATER" : "// EDIT REPEATER")
+                .setView(sv)
+                .setPositiveButton("Save", (dd, w) -> {
+                    long hz = 0;
+                    try { hz = Math.round(Double.parseDouble(out.getText().toString().trim()) * 1e6); } catch (NumberFormatException ignored) { }
+                    if (hz < 1_000_000L) { toast("Enter the output frequency in MHz, like 146.820"); return; }
+                    String csv = "Output,Offset,Tone,Callsign,Location,Notes,Latitude,Longitude\n"
+                            + q(Repeaters.mhz(hz)) + "," + q(off.getText().toString()) + "," + q(tone.getText().toString()) + ","
+                            + q(call.getText().toString()) + "," + q(where.getText().toString()) + "," + q(notes.getText().toString()) + ","
+                            + lat + "," + lon + "\n";
+                    Repeaters.ImportResult res = Repeaters.parseCsv(csv, RepeaterStore.MINE);
+                    if (res.repeaters.isEmpty()) { toast("Couldn't read that frequency"); return; }
+                    Repeaters.Repeater r = res.repeaters.get(0);
+                    if (edit != null) {
+                        r.id = edit.id;
+                        r.region = edit.region;
+                        r.status = edit.status;
+                        r.mode = edit.mode;
+                        app.repeaters.remove(edit.id);
+                    } else {
+                        r.id = "";
+                        r.region = RepeaterStore.MINE;
+                    }
+                    app.repeaters.add(r);
+                    if (!repeatersOn()) app.prefs.edit().putBoolean("repeaters", true).apply();
+                    redrawRepeaters();
+                    toast("Saved " + Repeaters.mhz(r.outHz) + (map.getZoomLevelDouble() < RPT_MIN_ZOOM ? ". Zoom in to see repeaters." : ""));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private static String q(String s) { return "\"" + s.trim().replace("\"", "\"\"") + "\""; }
+
+    private EditText field(LinearLayout box, String hint, int type) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setInputType(type);
+        e.setTextSize(15);
+        box.addView(e);
+        return e;
+    }
+
+    private void repeaterMenu() {
+        java.util.Map<String, Integer> regions = app.repeaters.regions();
+        int total = app.repeaters.size();
+        final String SHOW = repeatersOn() ? "Hide repeaters on the map" : "Show repeaters on the map",
+                STATE = "Download a state…", NEAR = "Download repeaters near me (100 mi)",
+                ADD = "Add one at the crosshair", CSV = "Import a CSV list…", RM = "Remove a list…";
+        List<String> items = new ArrayList<>(Arrays.asList(STATE, NEAR, ADD, CSV));
+        if (!regions.isEmpty()) items.add(RM);
+        items.add(0, SHOW);
+        StringBuilder head = new StringBuilder();
+        if (total == 0) head.append("No repeaters saved yet. Download a state from HearHam.live (free, needs internet once), add your own, or import a list.");
+        else {
+            head.append(total).append(" saved on this phone, shown when zoomed in:");
+            for (java.util.Map.Entry<String, Integer> e : regions.entrySet())
+                head.append("\n  ").append(RepeaterStore.regionName(e.getKey())).append(": ").append(e.getValue());
+        }
+        float dens = getResources().getDisplayMetrics().density;
+        int pad = (int) (20 * dens);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, pad / 2, 0, 0);
+        TextView msg = new TextView(this);
+        msg.setPadding(pad, 0, pad, pad / 2);
+        msg.setText(head);
+        msg.setTypeface(android.graphics.Typeface.MONOSPACE);
+        box.addView(msg);
+        AlertDialog[] dlgRef = new AlertDialog[1];
+        android.util.TypedValue tv = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true);
+        for (int i = 0; i < items.size(); i++) {
+            final int which = i;
+            TextView row = new TextView(this);
+            row.setText(items.get(i));
+            row.setTextSize(16);
+            row.setMinHeight((int) (48 * dens));
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(pad, 0, pad, 0);
+            row.setBackgroundResource(tv.resourceId);
+            row.setOnClickListener(v -> {
+                if (dlgRef[0] != null) dlgRef[0].dismiss();
+                onRepeaterMenuItem(items.get(which), SHOW, STATE, NEAR, ADD, CSV, RM, regions);
+            });
+            box.addView(row);
+        }
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(box);
+        dlgRef[0] = new AlertDialog.Builder(this)
+                .setTitle("// REPEATERS")
+                .setView(sv)
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void onRepeaterMenuItem(String a, String SHOW, String STATE, String NEAR, String ADD, String CSV, String RM,
+                                    java.util.Map<String, Integer> regions) {
+        if (a.equals(SHOW)) {
+            app.prefs.edit().putBoolean("repeaters", !repeatersOn()).apply();
+            redrawRepeaters();
+            if (repeatersOn() && map.getZoomLevelDouble() < RPT_MIN_ZOOM) toast("Zoom in to see repeaters");
+        } else if (a.equals(STATE)) pickState();
+        else if (a.equals(NEAR)) {
+            Location l = app.lastLoc;
+            if (l == null) { toast("No GPS fix yet"); return; }
+            startRepeaterDownload("near you", done -> app.repeaters.downloadNear(l.getLatitude(), l.getLongitude(), 161, done));
+        } else if (a.equals(ADD)) {
+            IGeoPoint c = map.getMapCenter();
+            promptRepeater(null, c.getLatitude(), c.getLongitude());
+        } else if (a.equals(CSV)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("// IMPORT REPEATERS")
+                    .setMessage("Pick a CSV file with a header row. FieldMap reads columns named like Output (or Frequency), "
+                            + "Input or Offset, Tone (CTCSS/PL/DCS), Callsign, Location, Notes, and Latitude and Longitude. "
+                            + "Rows without a latitude and longitude are skipped, since the map needs a spot for each one. "
+                            + "Importing a file with the same name again replaces it.")
+                    .setPositiveButton("Pick file", (d2, w) -> pickFile(Intent.ACTION_OPEN_DOCUMENT, "*/*", null, REQ_RPT_CSV))
+                    .setNegativeButton("Cancel", null).show();
+        } else if (a.equals(RM)) {
+            List<String> codes = new ArrayList<>(regions.keySet());
+            String[] names = new String[codes.size()];
+            for (int i = 0; i < names.length; i++) names[i] = RepeaterStore.regionName(codes.get(i)) + " (" + regions.get(codes.get(i)) + ")";
+            new AlertDialog.Builder(this).setTitle("// REMOVE")
+                    .setItems(names, (d3, i) -> {
+                        app.repeaters.removeRegion(codes.get(i));
+                        redrawRepeaters();
+                        toast("Removed " + names[i]);
+                    }).setNegativeButton("Cancel", null).show();
+        }
+    }
+
+    private interface Downloader { void start(RepeaterStore.Done done); }
+
+    private void startRepeaterDownload(String what, Downloader dl) {
+        if (app.repeaters.busy()) { toast("A repeater download is already running"); return; }
+        toast("Downloading repeaters " + what + " from HearHam.live…");
+        dl.start((err, n) -> {
+            if (isFinishing()) return;
+            if (err != null) { toast("Repeater download failed: " + err); return; }
+            if (!repeatersOn()) app.prefs.edit().putBoolean("repeaters", true).apply();
+            redrawRepeaters();
+            toast(n == 0 ? "HearHam has no repeaters listed " + what + " yet"
+                    : n + " repeaters saved " + what + (map.getZoomLevelDouble() < RPT_MIN_ZOOM ? ". Zoom in to see them." : ""));
+        });
+    }
+
+    private void pickState() {
+        Object[][] st = Repeaters.STATES;
+        String[] names = new String[st.length];
+        int okIndex = 0;
+        for (int i = 0; i < st.length; i++) {
+            names[i] = (String) st[i][1];
+            if ("OK".equals(st[i][0])) okIndex = i;
+        }
+        // Start the list at the state the map is over, if any.
+        IGeoPoint c = map.getMapCenter();
+        for (int i = 0; i < st.length; i++) if (Repeaters.inState(st[i], c.getLatitude(), c.getLongitude())) { okIndex = i; break; }
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("// DOWNLOAD A STATE")
+                .setItems(names, (d, i) -> {
+                    String code = (String) st[i][0];
+                    startRepeaterDownload("for " + st[i][1], done -> app.repeaters.downloadState(code, done));
+                })
+                .setNegativeButton("Cancel", null)
+                .create();
+        final int sel = okIndex;
+        dlg.setOnShowListener(x -> dlg.getListView().setSelection(Math.max(0, sel - 2)));
+        dlg.show();
+    }
+
+    private void importRepeaterCsv(android.net.Uri uri) throws Exception {
+        String name = tools.displayName(uri);
+        if (name == null || name.isEmpty()) name = "imported.csv";
+        Repeaters.ImportResult res = app.repeaters.importCsv(readText(uri), name);
+        String skipped = (res.skippedNoLocation > 0 ? "\n" + res.skippedNoLocation + " skipped: no latitude/longitude" : "")
+                + (res.skippedNoFrequency > 0 ? "\n" + res.skippedNoFrequency + " skipped: no output frequency" : "");
+        if (!res.repeaters.isEmpty()) {
+            if (!repeatersOn()) app.prefs.edit().putBoolean("repeaters", true).apply();
+            redrawRepeaters();
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("// IMPORT " + name.toUpperCase(Locale.US))
+                .setMessage((res.repeaters.isEmpty() ? "No repeaters imported." : res.repeaters.size() + " repeaters imported.") + skipped
+                        + (res.repeaters.isEmpty() ? "\n\nThe file needs a header row with an Output or Frequency column and Latitude and Longitude columns." : ""))
+                .setPositiveButton("OK", null).show();
     }
 
     // ---------- pins, stations, targets ----------
@@ -1261,6 +1646,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     refreshMarkers();
                 })
                 .setNegativeButton("Cancel", null)
+                .setNeutralButton("Repeater…", (d, w) -> promptRepeater(null, lat, lon))
                 .show();
     }
 
@@ -1397,6 +1783,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             String[] parts = target.substring(3).split(",", 3);
             return new double[]{Double.parseDouble(parts[0]), Double.parseDouble(parts[1])};
         }
+        if (target.startsWith("rpt:")) {
+            Repeaters.Repeater r = app.repeaters.get(target.substring(4));
+            return r == null ? null : new double[]{r.lat, r.lon};
+        }
         if (target.startsWith("rte:")) {
             String[] parts = target.split(":", 3);
             Store.Shape s = parts.length < 3 ? null : app.store.shapes.get(parts[2]);
@@ -1414,6 +1804,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
             return p == null ? "" : p.name;
         }
         if (target.startsWith("sta:")) return app.displayName(target.substring(4));
+        if (target.startsWith("rpt:")) {
+            Repeaters.Repeater r = app.repeaters.get(target.substring(4));
+            return r == null ? "" : Repeaters.mhz(r.outHz) + " " + r.callsign;
+        }
         if (target.startsWith("rte:")) {
             String[] rp = target.split(":", 3);
             Store.Shape s = rp.length < 3 ? null : app.store.shapes.get(rp[2]);
@@ -1531,9 +1925,10 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                 POS = "Send my position now", DRAW = "Draw a route or zone",
                 LOS = "Line of sight: me → crosshair", DL = "Download this area for offline",
                 FILES = "Files: import, trail, backup", WX = "Weather alerts", ASK = "Ask Lantern (offline library)", CLR = "Clear heard stations",
+                RPT = "Repeaters (ham & GMRS)",
                 LOG = "Packet log", DIAG = "Map diagnostics", SET = "Settings",
                 BAT = "Keep running in background (battery)", HELP = "Help";
-        final String[] items = {RADIOS, CHK, POS, DRAW, LOS, DL, ASK, FILES, WX, CLR, LOG, DIAG, BAT, SET, HELP};
+        final String[] items = {RADIOS, CHK, POS, DRAW, LOS, DL, RPT, ASK, FILES, WX, CLR, LOG, DIAG, BAT, SET, HELP};
         new AlertDialog.Builder(this)
                 .setItems(items, (d, which) -> {
                     String a = items[which];
@@ -1548,6 +1943,7 @@ public class MainActivity extends AppCompatActivity implements FieldMapApp.Liste
                     }
                     else if (a.equals(DL)) downloadArea();
                     else if (a.equals(ASK)) startActivity(new Intent(this, AskActivity.class));
+                    else if (a.equals(RPT)) repeaterMenu();
                     else if (a.equals(FILES)) filesMenu();
                     else if (a.equals(WX)) weatherMenu();
                     else if (a.equals(CLR)) { app.store.clearStations(); app.sosFrom.clear(); refreshMarkers(); }
